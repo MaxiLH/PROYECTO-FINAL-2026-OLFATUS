@@ -2,6 +2,7 @@
 #include <SPI.h>
 #include <Adafruit_Sensor.h>
 #include "Adafruit_BME680.h"
+#include <string.h>
 
 #define SEALEVELPRESSURE_HPA (1013.25)
 
@@ -25,14 +26,14 @@ float resistenciaGas = NAN;
 // CONFIG CAPTURA
 //==============================
 
-#define NUM_MUESTRAS 40
-#define PERIODO_MUESTREO 125 // ms
+#define NUM_MUESTRAS 50
+#define PERIODO_MUESTREO 100 // ms
 
 struct Muestra {
-  float mq138;
-  float mq135;
-  float bme;
-  unsigned long tiempo;
+  uint16_t mq138;   // mV
+  uint16_t mq135;   // mV
+  uint16_t bme;     // KOhm*100
+  uint16_t tiempo;  // ms
 };
 
 Muestra muestras[NUM_MUESTRAS];
@@ -125,10 +126,11 @@ void loop() {
     case ESPERANDO_REINICIO:
 
       if (Serial.available()) {
-        String comando = Serial.readStringUntil('\n');
-        comando.trim();
+        char buffer[20];
+        int n = Serial.readBytesUntil('\n', buffer, sizeof(buffer)-1);
+        buffer[n]='\0';
 
-        if (comando == "reinicio") {
+        if (strcmp(buffer, "reinicio") == 0) {
           Serial.println();
           Serial.println("==================================");
           Serial.println("Nueva prueba");
@@ -215,13 +217,13 @@ void capturarMuestras() {
   for (int i = 0; i < NUM_MUESTRAS; i++) {
     gestionarBME();
 
-    muestras[i].mq138 = analogRead(A0) * (5.0 / 1023.0);
+    float lecturaMQ138 = analogRead(A0) * (5.0 / 1023.0);
+    float lecturaMQ135 = analogRead(A2) * (5.0 / 1023.0);
 
-    muestras[i].mq135 = analogRead(A2) * (5.0 / 1023.0);
-
-    muestras[i].bme = resistenciaGas;
-
-    muestras[i].tiempo = millis() - inicio;
+    muestras[i].mq138 = (uint16_t)(lecturaMQ138 * 1000.0);
+    muestras[i].mq135 = (uint16_t)(lecturaMQ135 * 1000.0);
+    muestras[i].bme   = (uint16_t)(resistenciaGas * 100.0);
+    muestras[i].tiempo = (uint16_t)(millis() - inicio);
 
     delay(PERIODO_MUESTREO);
   }
