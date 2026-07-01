@@ -26,17 +26,12 @@ float resistenciaGas = NAN;
 // CONFIG CAPTURA
 //==============================
 
-#define NUM_MUESTRAS 50
-#define PERIODO_MUESTREO 100 // ms
+#define NUM_MUESTRAS 25
+#define PERIODO_MUESTREO 200 // ms
 
-struct Muestra {
-  uint16_t mq138;   // mV
-  uint16_t mq135;   // mV
-  uint16_t bme;     // KOhm*100
-  uint16_t tiempo;  // ms
-};
-
-Muestra muestras[NUM_MUESTRAS];
+uint16_t curvaMQ138[NUM_MUESTRAS];
+uint16_t curvaMQ135[NUM_MUESTRAS];
+uint16_t curvaBME[NUM_MUESTRAS];
 
 //==============================
 // REFERENCIAS
@@ -57,27 +52,27 @@ enum Estado {
 };
 Estado estado = ESPERANDO_REFERENCIA;
 
-//====================================================
-
 void setup() {
-  Serial.begin(115200);
 
-  if (bme.begin()) {
-    configurarBME();
-    bmeDisponible = true;
-    Serial.println("BME680 conectado");
-  } else {
-    Serial.println("BME680 no encontrado");
+  Serial.begin(112500);
+  while(!Serial);
+
+  Serial.println("PASO 1");
+  if (!bme.begin()) {
+
+      Serial.println("PASO 2");
+      while(1);
   }
 
-  Serial.println();
-  Serial.println("==================================");
-  Serial.println("Envie cualquier caracter");
-  Serial.println("para tomar referencia");
-  Serial.println("==================================");
-}
+  Serial.println("PASO 3");
+  configurarBME();
 
-//====================================================
+  Serial.println("PASO 4");
+  bmeDisponible = true;
+
+  Serial.println("PASO 5");
+  
+}
 
 void loop() {
   gestionarBME();
@@ -209,49 +204,77 @@ void obtenerReferencia() {
 //====================================================
 
 void capturarMuestras() {
+
   Serial.println();
   Serial.println("Capturando 5 segundos...");
 
-  unsigned long inicio = millis();
+  for(int i=0;i<NUM_MUESTRAS;i++) {
 
-  for (int i = 0; i < NUM_MUESTRAS; i++) {
-    gestionarBME();
+      gestionarBME();
 
-    float lecturaMQ138 = analogRead(A0) * (5.0 / 1023.0);
-    float lecturaMQ135 = analogRead(A2) * (5.0 / 1023.0);
+      float mq138=
+      analogRead(A0)*(5.0/1023.0);
 
-    muestras[i].mq138 = (uint16_t)(lecturaMQ138 * 1000.0);
-    muestras[i].mq135 = (uint16_t)(lecturaMQ135 * 1000.0);
-    muestras[i].bme   = (uint16_t)(resistenciaGas * 100.0);
-    muestras[i].tiempo = (uint16_t)(millis() - inicio);
+      float mq135=
+      analogRead(A2)*(5.0/1023.0);
 
-    delay(PERIODO_MUESTREO);
+      curvaMQ138[i]=
+      (uint16_t)(mq138*1000);
+
+      curvaMQ135[i]=
+      (uint16_t)(mq135*1000);
+
+      curvaBME[i]=
+      (uint16_t)
+      (resistenciaGas*100);
+
+      delay(PERIODO_MUESTREO);
   }
-
   Serial.println("Captura terminada");
 }
 
 //====================================================
 
 void analizarDatos() {
-  float maxMQ138 = muestras[0].mq138;
-  float maxMQ135 = muestras[0].mq135;
-  float minBME = muestras[0].bme;
+  float maxMQ138=
+  curvaMQ138[0]/1000.0;
+
+  float maxMQ135=
+  curvaMQ135[0]/1000.0;
+
+  float minBME=
+  curvaBME[0]/100.0;
 
   float areaMQ138 = 0;
   float areaMQ135 = 0;
   float areaBME = 0;
 
-  for (int i = 0; i < NUM_MUESTRAS; i++) {
-    if (muestras[i].mq138 > maxMQ138) maxMQ138 = muestras[i].mq138;
+  for(int i=0;i<NUM_MUESTRAS;i++){
 
-    if (muestras[i].mq135 > maxMQ135) maxMQ135 = muestras[i].mq135;
+  float mq138=
+  curvaMQ138[i]/1000.0;
 
-    if (muestras[i].bme < minBME) minBME = muestras[i].bme;
+  float mq135=
+  curvaMQ135[i]/1000.0;
 
-    areaMQ138 += muestras[i].mq138;
-    areaMQ135 += muestras[i].mq135;
-    areaBME += (baseBME - muestras[i].bme);
+  float bme=
+  curvaBME[i]/100.0;
+
+  if(mq138>maxMQ138)
+  maxMQ138=mq138;
+
+  if(mq135>maxMQ135)
+  maxMQ135=mq135;
+
+  if(bme<minBME)
+  minBME=bme;
+
+  areaMQ138+=mq138;
+
+  areaMQ135+=mq135;
+
+  areaBME+=(baseBME-bme);
+
   }
 
   areaMQ138 *= 0.1;
@@ -278,9 +301,9 @@ void analizarDatos() {
   long t90MQ138 = -1;
 
   for (int i = 0; i < NUM_MUESTRAS; i++) {
-    if (t50MQ138 == -1 && muestras[i].mq138 >= objetivo50MQ138) t50MQ138 = muestras[i].tiempo;
+    if (t50MQ138 == -1 && curvaMQ138[i]/1000.0 >= objetivo50MQ138) t50MQ138 = i*PERIODO_MUESTREO;
 
-    if (t90MQ138 == -1 && muestras[i].mq138 >= objetivo90MQ138) t90MQ138 = muestras[i].tiempo;
+    if (t90MQ138 == -1 && curvaMQ138[i]/1000.0 >= objetivo90MQ138) t90MQ138 = i*PERIODO_MUESTREO;
   }
   //==============================
   // T50 Y T90 MQ135
@@ -294,41 +317,76 @@ void analizarDatos() {
   long t90MQ135 = -1;
 
   for (int i = 0; i < NUM_MUESTRAS; i++) {
-    if (t50MQ135 == -1 && muestras[i].mq135 >= objetivo50MQ135) t50MQ135 = muestras[i].tiempo;
+    if (t50MQ135 == -1 && curvaMQ135[i]/1000.0 >= objetivo50MQ135) t50MQ135 = i*PERIODO_MUESTREO;
 
-    if (t90MQ135 == -1 && muestras[i].mq135 >= objetivo90MQ135) t90MQ135 = muestras[i].tiempo;
+    if (t90MQ135 == -1 && curvaMQ135[i]/1000.0 >= objetivo90MQ135) t90MQ135 = i*PERIODO_MUESTREO;
   }
 
   //==============================
   // PENDIENTE INICIAL
   //==============================
 
-  float pendienteMQ138 = (muestras[5].mq138 - muestras[0].mq138) / ((muestras[5].tiempo - muestras[0].tiempo) / 1000.0);
+  float pendienteMQ138= ( (curvaMQ138[5]/1000.0) - (curvaMQ138[0]/1000.0)) / (5.0*PERIODO_MUESTREO/1000.0);
 
-  float pendienteMQ135 = (muestras[5].mq135 - muestras[0].mq135) / ((muestras[5].tiempo - muestras[0].tiempo) / 1000.0);
+  float pendienteMQ135= ( (curvaMQ135[5]/1000.0) - (curvaMQ135[0]/1000.0)) / (5.0*PERIODO_MUESTREO/1000.0);
 
-  float pendienteBME = (muestras[5].bme - muestras[0].bme) / ((muestras[5].tiempo - muestras[0].tiempo) / 1000.0);
+  float pendienteBME=
+
+(
+(curvaBME[5]/100.0)
+-
+(curvaBME[0]/100.0)
+)
+
+/
+
+(
+5.0*PERIODO_MUESTREO/1000.0
+);
 
   //==================================================
   // IMPRIMIR TODAS LAS MUESTRAS
-  //==================================================
+  //==================================================  
 
   Serial.println();
   Serial.println("===== MUESTRAS =====");
   Serial.println("Tiempo, MQ138, MQ135, BME");
 
-  for (int i = 0; i < NUM_MUESTRAS; i++) {
-    Serial.print(muestras[i].tiempo);
-    Serial.print(",");
+  for(int i=0;i<NUM_MUESTRAS;i++)
+{
 
-    Serial.print(muestras[i].mq138, 4);
-    Serial.print(",");
+Serial.print(
+i*PERIODO_MUESTREO
+);
 
-    Serial.print(muestras[i].mq135, 4);
-    Serial.print(",");
+Serial.print(",");
 
-    Serial.println(muestras[i].bme, 2);
-  }
+
+Serial.print(
+curvaMQ138[i]/1000.0,
+4
+);
+
+
+Serial.print(",");
+
+
+Serial.print(
+curvaMQ135[i]/1000.0,
+4
+);
+
+
+Serial.print(",");
+
+
+Serial.println(
+curvaBME[i]/100.0,
+2
+);
+
+
+}
 
   //==================================================
   // RESUMEN
