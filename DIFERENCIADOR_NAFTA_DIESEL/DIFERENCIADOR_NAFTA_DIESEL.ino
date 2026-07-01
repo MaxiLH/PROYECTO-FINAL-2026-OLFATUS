@@ -11,7 +11,7 @@
  *
  * Santino Leguizamo
  * Constantino Guagnini
- * Maximiliano Hunag
+ * Maximiliano Huang
  * Ivan Musto
  **********************************************************************/
 #include <Wire.h>
