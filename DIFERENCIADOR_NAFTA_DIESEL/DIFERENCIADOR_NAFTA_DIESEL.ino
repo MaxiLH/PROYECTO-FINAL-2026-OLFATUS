@@ -401,6 +401,10 @@ void obtenerReferencia() {
   referencia.bme = sumaBME / N;
 }
 
+//=========================================================
+// ESPERANDO INICIO CAPTURA
+//=========================================================
+
 void iniciarCaptura() {
   Serial.println();
   Serial.println(F("Capturando..."));
@@ -626,8 +630,7 @@ Combustible decidirFinal() {
 }
 
 void imprimirResultado() {
-  Combustible resultado =
-    decidirFinal();
+  Combustible resultado = decidirFinal();
 
   Serial.println();
   Serial.println(F("============================"));
