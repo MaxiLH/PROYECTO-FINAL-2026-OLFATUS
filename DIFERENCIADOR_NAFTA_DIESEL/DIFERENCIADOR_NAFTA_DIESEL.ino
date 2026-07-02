@@ -169,30 +169,54 @@ Estado estado = ESPERANDO_REFERENCIA;
 // UMBRALES
 //=========================================================
 
-struct ZonaDecision {
-  float dieselSeguro;
-  float naftaSegura;
+struct IntervaloDecision {
+  float dieselMin;
+  float dieselMax;
+
+  float naftaMin;
+  float naftaMax;
 };
 
-ZonaDecision umbralRelacion = {
-  0.55,
-  0.65
+IntervaloDecision umbralRelacion = {
+  0.44,  // Diesel mínimo
+  0.52,  // Diesel máximo
+
+  0.70,  // Nafta mínimo (SIN la muestra 1)
+  0.82   // Nafta máximo
 };
 
-ZonaDecision umbralArea135 = {
+IntervaloDecision umbralArea135 = {
+  3.10,
   3.80,
-  4.40
+
+  4.20,
+  7.20
 };
 
-ZonaDecision umbralVar135 = {
-  70.0,
-  95.0
+IntervaloDecision umbralVar135 = {
+  30.0,
+  65.0,
+
+  95.0,
+  230.0
 };
 
-ZonaDecision umbralPendiente135 = {
-  0.45,
-  0.65
+IntervaloDecision umbralPendiente135 = {
+  0.10,
+  0.40,
+
+  0.70,
+  2.20
 };
+
+//=========================================================
+// PESOS VARIABLES
+//=========================================================
+
+const byte PESO_RELACION   = 2;
+const byte PESO_AREA       = 1;
+const byte PESO_VARIACION  = 1;
+const byte PESO_PENDIENTE  = 1;
 
 //=========================================================
 // PROTOTIPOS
@@ -530,41 +554,49 @@ void calcularFeatures() {
 //=========================================================
 
 ResultadoVariable evaluarRelacion() {
-  if (datos.relacion <= umbralRelacion.dieselSeguro)
+  if (datos.relacion >= umbralRelacion.dieselMin && datos.relacion <= umbralRelacion.dieselMax) {
     return VOTO_DIESEL;
+  }
 
-  if (datos.relacion >= umbralRelacion.naftaSegura)
+  if (datos.relacion >= umbralRelacion.naftaMin && datos.relacion <= umbralRelacion.naftaMax) {
     return VOTO_NAFTA;
+  }
 
   return VOTO_DUDA;
 }
 
 ResultadoVariable evaluarVariacion() {
-  if (datos.variacion135 <= umbralVar135.dieselSeguro)
+  if (datos.variacion135 >= umbralVar135.dieselMin && datos.variacion135 <= umbralVar135.dieselMax) {
     return VOTO_DIESEL;
+  }
 
-  if (datos.variacion135 >= umbralVar135.naftaSegura)
+  if (datos.variacion135 >= umbralVar135.naftaMin && datos.variacion135 <= umbralVar135.naftaMax) {
     return VOTO_NAFTA;
+  }
 
   return VOTO_DUDA;
 }
 
 ResultadoVariable evaluarArea() {
-  if (datos.area135 <= umbralArea135.dieselSeguro)
+  if (datos.area135 >= umbralArea135.dieselMin && datos.area135 <= umbralArea135.dieselMax) {
     return VOTO_DIESEL;
+  }
 
-  if (datos.area135 >= umbralArea135.naftaSegura)
+  if (datos.area135 >= umbralArea135.naftaMin && datos.area135 <= umbralArea135.naftaMax) {
     return VOTO_NAFTA;
+  }
 
   return VOTO_DUDA;
 }
 
 ResultadoVariable evaluarPendiente() {
-  if (datos.pendiente135 <= umbralPendiente135.dieselSeguro)
+  if (datos.pendiente135 >= umbralPendiente135.dieselMin && datos.pendiente135 <= umbralPendiente135.dieselMax) {
     return VOTO_DIESEL;
+  }
 
-  if (datos.pendiente135 >= umbralPendiente135.naftaSegura)
+  if (datos.pendiente135 >= umbralPendiente135.naftaMin && datos.pendiente135 <= umbralPendiente135.naftaMax) {
     return VOTO_NAFTA;
+  }
 
   return VOTO_DUDA;
 }
@@ -582,9 +614,9 @@ Combustible decidirFinal() {
 
   r = evaluarRelacion();
 
-  if (r == VOTO_DIESEL) votosDiesel++;
-  else if (r == VOTO_NAFTA) votosNafta++;
-  else votosDuda++;
+  if (r == VOTO_DIESEL) votosDiesel += PESO_RELACION;
+  else if (r == VOTO_NAFTA) votosNafta += PESO_RELACION;
+  else votosDuda+= PESO_RELACION;
 
   //-----------------------
   // Variación
@@ -592,9 +624,9 @@ Combustible decidirFinal() {
 
   r = evaluarVariacion();
 
-  if (r == VOTO_DIESEL) votosDiesel++;
-  else if (r == VOTO_NAFTA) votosNafta++;
-  else votosDuda++;
+  if (r == VOTO_DIESEL) votosDiesel += PESO_VARIACION;
+  else if (r == VOTO_NAFTA) votosNafta += PESO_VARIACION;
+  else votosDuda += PESO_VARIACION;
 
   //-----------------------
   // Área
@@ -602,9 +634,9 @@ Combustible decidirFinal() {
 
   r = evaluarArea();
 
-  if (r == VOTO_DIESEL) votosDiesel++;
-  else if (r == VOTO_NAFTA) votosNafta++;
-  else votosDuda++;
+  if (r == VOTO_DIESEL) votosDiesel += PESO_AREA;
+  else if (r == VOTO_NAFTA) votosNafta += PESO_AREA;
+  else votosDuda += PESO_AREA;
 
   //-----------------------
   // Pendiente
@@ -612,9 +644,9 @@ Combustible decidirFinal() {
 
   r = evaluarPendiente();
 
-  if (r == VOTO_DIESEL) votosDiesel++;
-  else if (r == VOTO_NAFTA) votosNafta++;
-  else votosDuda++;
+  if (r == VOTO_DIESEL) votosDiesel += PESO_PENDIENTE;
+  else if (r == VOTO_NAFTA) votosNafta +=PESO_PENDIENTE;
+  else votosDuda += PESO_PENDIENTE;
 
   //-----------------------
   // DECISIÓN
