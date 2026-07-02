@@ -155,15 +155,16 @@ enum Combustible {
 //=========================================================
 
 enum Estado {
-  ESPERANDO_COMANDO,
+  ESPERANDO_REFERENCIA,
   TOMANDO_REFERENCIA,
+  ESPERANDO_INICIO_CAPTURA,
   CAPTURANDO,
   CALCULANDO,
   CLASIFICANDO,
   MOSTRANDO
 };
 
-Estado estado = ESPERANDO_COMANDO;
+Estado estado = ESPERANDO_REFERENCIA;
 //=========================================================
 // UMBRALES
 //=========================================================
@@ -230,7 +231,6 @@ void setup() {
 
   while (!Serial)
     ;
-
   if (bme.begin()) {
     configurarBME();
 
@@ -251,7 +251,7 @@ void loop() {
 
   switch (estado) {
 
-    case ESPERANDO_COMANDO:
+    case ESPERANDO_REFERENCIA:
 
       if (Serial.available()) {
         while (Serial.available())
@@ -266,9 +266,28 @@ void loop() {
 
       obtenerReferencia();
 
-      iniciarCaptura();
+      Serial.println();
+      Serial.println(F("============================"));
+      Serial.println(F("Referencia obtenida."));
+      Serial.println(F("Prepare la muestra."));
+      Serial.println(F("Envie cualquier caracter"));
+      Serial.println(F("para comenzar la deteccion."));
+      Serial.println(F("============================"));
 
-      estado = CAPTURANDO;
+      estado = ESPERANDO_INICIO_CAPTURA;
+
+      break;
+
+    case ESPERANDO_INICIO_CAPTURA:
+
+      if (Serial.available()) {
+        while (Serial.available())
+          Serial.read();
+
+        iniciarCaptura();
+
+        estado = CAPTURANDO;
+      }
 
       break;
 
@@ -363,8 +382,7 @@ void obtenerReferencia() {
   float suma138 = 0;
   float sumaBME = 0;
 
-  const byte N =
-    TIEMPO_REFERENCIA / 100;
+  const byte N = TIEMPO_REFERENCIA / 100;
 
   for (byte i = 0; i < N; i++) {
     gestionarBME();
@@ -387,8 +405,7 @@ void iniciarCaptura() {
   Serial.println();
   Serial.println(F("Capturando..."));
 
-  tiempoInicioCaptura =
-    millis();
+  tiempoInicioCaptura = millis();
 
   ultimoMuestreo = 0;
 
@@ -485,9 +502,9 @@ void calcularFeatures() {
   // Variaciones
   //-----------------------
 
-  datos.variacion135 = ((datos.max135 - referencia.mq135)/referencia.mq135)* 100.0;
+  datos.variacion135 = ((datos.max135 - referencia.mq135) / referencia.mq135) * 100.0;
 
-  datos.variacion138 = ((datos.max138 - referencia.mq138)/referencia.mq138)* 100.0;
+  datos.variacion138 = ((datos.max138 - referencia.mq138) / referencia.mq138) * 100.0;
 
   //-----------------------
   // Relacion
