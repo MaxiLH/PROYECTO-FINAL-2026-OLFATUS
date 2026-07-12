@@ -1,0 +1,341 @@
+//==============================
+// Pines
+//==============================
+
+#define LED_AZUL 3
+#define LED_AMARILLO 5
+#define LED_ROJO 6
+#define BUZZER 8
+
+//==============================
+// Control interfaz
+//==============================
+enum EstadoUI {
+  UI_APAGADO,
+  UI_LIMPIEZA,
+  UI_LISTO,
+  UI_EXTRACCION,
+  UI_ANALISIS,
+  UI_DIESEL,
+  UI_NAFTA,
+  UI_DUDA,
+  UI_SOBREPRESION
+};
+
+EstadoUI estadoUI = UI_APAGADO;
+
+void actualizarInterfaz();
+
+unsigned long tiempoUI = 0;
+byte pasoUI = 0;
+
+EstadoUI estadoUIAnterior = UI_APAGADO;
+
+//==============================
+// Beep resultado
+//==============================
+
+bool beepActivo = false;
+bool beepResultadoHecho = false;
+unsigned long tiempoBeep = 0;
+
+//==============================
+// PRUEBA Cambio automático de estados
+//==============================
+
+unsigned long tiempoCambioEstado = 0;
+
+void setup() {
+  pinMode(LED_AZUL, OUTPUT);
+  pinMode(LED_AMARILLO, OUTPUT);
+  pinMode(LED_ROJO, OUTPUT);
+
+  pinMode(BUZZER, OUTPUT);
+  //PRUEBA
+  tiempoCambioEstado = millis();
+}
+
+void loop() {
+  cambiarEstadoAutomatico();
+
+  actualizarInterfaz();
+}
+
+//PRUEBA
+void cambiarEstadoAutomatico() {
+  if (millis() - tiempoCambioEstado < 3000)
+    return;
+
+  tiempoCambioEstado = millis();
+
+  switch (estadoUI) {
+    case UI_APAGADO:
+      estadoUI = UI_LIMPIEZA;
+      Serial.print("Estado UI: ");
+      Serial.println(estadoUI);
+      break;
+
+    case UI_LIMPIEZA:
+      estadoUI = UI_LISTO;
+      Serial.print("Estado UI: ");
+      Serial.println(estadoUI);
+      break;
+
+    case UI_LISTO:
+      estadoUI = UI_EXTRACCION;
+      Serial.print("Estado UI: ");
+      Serial.println(estadoUI);
+      break;
+
+    case UI_EXTRACCION:
+      estadoUI = UI_ANALISIS;
+      Serial.print("Estado UI: ");
+      Serial.println(estadoUI);
+      break;
+
+    case UI_ANALISIS:
+      estadoUI = UI_DIESEL;
+      Serial.print("Estado UI: ");
+      Serial.println(estadoUI);
+      break;
+
+    case UI_DIESEL:
+      estadoUI = UI_NAFTA;
+      Serial.print("Estado UI: ");
+      Serial.println(estadoUI);
+      break;
+
+    case UI_NAFTA:
+      estadoUI = UI_DUDA;
+      Serial.print("Estado UI: ");
+      Serial.println(estadoUI);
+      break;
+
+    case UI_DUDA:
+      estadoUI = UI_SOBREPRESION;
+      Serial.print("Estado UI: ");
+      Serial.println(estadoUI);
+      break;
+
+    case UI_SOBREPRESION:
+      estadoUI = UI_APAGADO;
+      Serial.print("Estado UI: ");
+      Serial.println(estadoUI);
+      break;
+  }
+}
+
+void actualizarInterfaz() {
+  if (estadoUI != estadoUIAnterior) {
+    estadoUIAnterior = estadoUI;
+    tiempoUI = millis();
+    pasoUI = 0;
+    beepActivo = false;
+    beepResultadoHecho = false;
+    digitalWrite(BUZZER, LOW);
+  }
+  switch (estadoUI) {
+    case UI_LIMPIEZA: patronLimpieza(); break;
+    case UI_LISTO: patronListo(); break;
+    case UI_EXTRACCION: patronExtraccion(); break;
+    case UI_ANALISIS: patronAnalisis(); break;
+    case UI_DIESEL: patronDiesel(); break;
+    case UI_NAFTA: patronNafta(); break;
+    case UI_DUDA: patronDuda(); break;
+    case UI_SOBREPRESION: patronSobrepresion(); break;
+  }
+}
+
+void setLED(byte azul, byte amarillo, byte rojo) {
+  analogWrite(LED_AZUL, azul);
+  analogWrite(LED_AMARILLO, amarillo);
+  analogWrite(LED_ROJO, rojo);
+}
+
+//==============================
+// BUZZER FUNCION
+//==============================
+
+void actualizarBeep() {
+  if (!beepActivo)
+    return;
+
+  if (millis() - tiempoBeep >= 80) {
+    digitalWrite(BUZZER, LOW);
+    beepActivo = false;
+  }
+}
+
+void iniciarBeep() {
+  digitalWrite(BUZZER, HIGH);
+
+  beepActivo = true;
+  tiempoBeep = millis();
+}
+
+//==============================
+// LIMPIEZA FUNCION
+//==============================
+
+void patronLimpieza() {
+  if (millis() - tiempoUI < 15)
+    return;
+
+  tiempoUI = millis();
+
+  static int brillo = 40;
+  static int dir = 1;
+
+  brillo += dir;
+
+  if (brillo >= 255)
+    dir = -1;
+
+  if (brillo <= 40)
+    dir = 1;
+
+  byte azul = brillo;
+
+  byte amarillo = map((brillo + 85) % 255, 0, 255, 40, 255);
+
+  byte rojo = map((brillo + 170) % 255, 0, 255, 40, 255);
+
+  setLED(azul, amarillo, rojo);
+}
+
+//==============================
+// TODO LISTO
+//==============================
+
+void patronListo() {
+  if (millis() - tiempoUI < 250)
+    return;
+
+  tiempoUI = millis();
+
+  pasoUI = !pasoUI;
+
+  if (pasoUI)
+    setLED(255, 255, 255);
+
+  else
+    setLED(0, 0, 0);
+}
+
+//==============================
+// EXTACCION
+//==============================
+
+void patronExtraccion() {
+  if (millis() - tiempoUI < 200)
+    return;
+
+  tiempoUI = millis();
+
+  pasoUI++;
+
+  if (pasoUI > 2)
+    pasoUI = 0;
+
+  switch (pasoUI) {
+    case 0:
+      setLED(255, 0, 0);
+      break;
+
+    case 1:
+      setLED(0, 255, 0);
+      break;
+
+    case 2:
+      setLED(0, 0, 255);
+      break;
+  }
+}
+
+//==============================
+// ANALISIS
+//==============================
+
+void patronAnalisis() {
+  if (millis() - tiempoUI < 90)
+    return;
+
+  tiempoUI = millis();
+
+  pasoUI++;
+
+  if (pasoUI > 2)
+    pasoUI = 0;
+
+  switch (pasoUI) {
+    case 0:
+      setLED(255, 0, 0);
+      break;
+
+    case 1:
+      setLED(0, 255, 0);
+      break;
+
+    case 2:
+      setLED(0, 0, 255);
+      break;
+  }
+}
+
+//==============================
+// COMBUSTIBLES DECISION
+//==============================
+
+void patronNafta() {
+  setLED(255, 0, 0);
+
+  if (!beepResultadoHecho) {
+    iniciarBeep();
+    beepResultadoHecho = true;
+  }
+
+  actualizarBeep();
+}
+
+void patronDiesel() {
+  setLED(0, 255, 0);
+
+  if (!beepResultadoHecho) {
+    iniciarBeep();
+    beepResultadoHecho = true;
+  }
+
+  actualizarBeep();
+}
+
+void patronDuda() {
+  setLED(0, 0, 255);
+
+  if (!beepResultadoHecho) {
+    iniciarBeep();
+    beepResultadoHecho = true;
+  }
+
+  actualizarBeep();
+}
+
+//==============================
+// SOBREPRESION
+//==============================
+
+void patronSobrepresion() {
+  if (millis() - tiempoUI < 100)
+    return;
+
+  tiempoUI = millis();
+
+  pasoUI = !pasoUI;
+
+  if (pasoUI) {
+    setLED(0, 0, 255);
+    digitalWrite(BUZZER, HIGH);
+  } else {
+    setLED(0, 0, 0);
+    digitalWrite(BUZZER, LOW);
+  }
+}
