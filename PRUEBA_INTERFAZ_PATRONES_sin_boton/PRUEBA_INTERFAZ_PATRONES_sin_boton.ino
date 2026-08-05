@@ -3,9 +3,9 @@
 //==============================
 
 #define LED_AZUL 3
-#define LED_AMARILLO 5
-#define LED_ROJO 6
-#define BUZZER 8
+#define LED_AMARILLO 4
+#define LED_ROJO 5
+#define BUZZER 13
 
 //==============================
 // Control interfaz
@@ -46,6 +46,7 @@ unsigned long tiempoBeep = 0;
 unsigned long tiempoCambioEstado = 0;
 
 void setup() {
+  Serial.begin(9600);
   pinMode(LED_AZUL, OUTPUT);
   pinMode(LED_AMARILLO, OUTPUT);
   pinMode(LED_ROJO, OUTPUT);
@@ -132,7 +133,7 @@ void actualizarInterfaz() {
     pasoUI = 0;
     beepActivo = false;
     beepResultadoHecho = false;
-    digitalWrite(BUZZER, LOW);
+    digitalWrite(BUZZER, HIGH);
   }
   switch (estadoUI) {
     case UI_LIMPIEZA: patronLimpieza(); break;
@@ -161,7 +162,7 @@ void actualizarBeep() {
     return;
 
   if (millis() - tiempoBeep >= 80) {
-    digitalWrite(BUZZER, LOW);
+    digitalWrite(BUZZER, HIGH);
     beepActivo = false;
   }
 }
@@ -333,10 +334,10 @@ void patronSobrepresion() {
 
   if (pasoUI) {
     setLED(0, 0, 255);
-    digitalWrite(BUZZER, HIGH);
+    digitalWrite(BUZZER, LOW);
   } else {
     setLED(0, 0, 0);
-    digitalWrite(BUZZER, LOW);
+    digitalWrite(BUZZER, HIGH);
   }
 }
 
