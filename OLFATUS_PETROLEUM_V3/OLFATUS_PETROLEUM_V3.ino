@@ -360,6 +360,7 @@ void loop() {
   switch (estado) {
 
     case Estado::LIMPIEZA_TRAMPA:
+      Serial.println("LIMPIEZA_TRAMPA");
       patronLimpieza();
 
       if (faseLimpieza == FaseLimpieza::CONFIRMANDO) {
@@ -371,6 +372,7 @@ void loop() {
       break;
 
     case Estado::EXTRACCION_LISTA_PARA_HACER:
+      Serial.println("EXTRACCION_LISTA_PARA_HACER");
       patronListo();
 
       if (botonPresionado()) {
@@ -380,16 +382,19 @@ void loop() {
       break;
 
     case Estado::EXTRAYENDO:
+      Serial.println("EXTRAYENDO");
       patronExtraccion();
       procesarExtraccion();
 
       break;
 
     case Estado::ANALIZANDO:
+     Serial.println("ANALIZANDO");
       // La clasificación se resuelve de forma instantánea en entrarEstado()
       break;
 
     case Estado::DUDA:
+      Serial.println("DUDA");
       patronDuda();
 
       if (botonPresionado()) {
@@ -399,14 +404,17 @@ void loop() {
       break;
 
     case Estado::DIESEL:
+      Serial.println("DIESEL");
       procesarResultado(DIESEL);
       break;
 
     case Estado::NAFTA:
+      Serial.println("NAFTA");
       procesarResultado(NAFTA);
       break;
 
     case Estado::EMERGENCIA:
+      Serial.println("EMERGENCIA");
       patronSobrepresion();
 
       if (millis() - tiempoInicioEmergencia >= TIEMPO_EMERGENCIA) {
@@ -932,13 +940,13 @@ void actualizarBeep() {
   if (!beepActivo) return;
 
   if (millis() - tiempoBeep >= 80) {
-    digitalWrite(BUZZER, HIGH);
+    digitalWrite(BUZZER, HIGH); // apagar (LOW = sonando, HIGH = silencio)
     beepActivo = false;
   }
 }
 
 void iniciarBeep() {
-  digitalWrite(BUZZER, HIGH);
+  digitalWrite(BUZZER, LOW); // encender (LOW = sonando, HIGH = silencio)
   beepActivo = true;
   tiempoBeep = millis();
 }
