@@ -364,8 +364,10 @@ void loop() {
       patronLimpieza();
 
       if (faseLimpieza == FaseLimpieza::CONFIRMANDO) {
+        Serial.println("PROCESAR_LIMPIEZA");
         procesarConfirmacionLimpieza();
       } else {
+        Serial.println("TOMAR_REFERENCIA");
         procesarTomaReferencia();
       }
 
