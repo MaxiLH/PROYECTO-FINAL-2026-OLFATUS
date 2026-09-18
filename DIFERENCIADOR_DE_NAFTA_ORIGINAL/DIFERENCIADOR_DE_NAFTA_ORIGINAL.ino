@@ -9,11 +9,8 @@
  *
  * Arquitectura general
  *
- * Santino Leguizamo
- * Constantino Guagnini
- * Maximiliano Huang
- * Ivan Musto
  **********************************************************************/
+
 #include <Wire.h>
 #include <SPI.h>
 #include <Adafruit_Sensor.h>
@@ -27,7 +24,7 @@ Adafruit_BME680 bme(&Wire);
 // PINES
 //=========================================================
 
-const byte PIN_MQ138 = A3;
+const byte PIN_MQ138 = A0;
 const byte PIN_MQ135 = A2;
 
 //=========================================================
@@ -36,7 +33,7 @@ const byte PIN_MQ135 = A2;
 
 const uint16_t PERIODO_MUESTREO = 200;    // ms
 const uint16_t TIEMPO_REFERENCIA = 2000;  // ms
-const uint16_t TIEMPO_CAPTURA = 15000;     // ms
+const uint16_t TIEMPO_CAPTURA = 5000;     // ms
 
 //=========================================================
 // BME
@@ -104,20 +101,6 @@ struct Features {
 Features datos;
 
 //=========================================================
-// VARIABLES AUXILIARES
-//=========================================================
-
-float primerMQ135;
-float primerMQ138;
-float primerBME;
-
-float mq135_1s;
-float mq138_1s;
-float bme_1s;
-
-bool pendienteCalculada = false;
-
-//=========================================================
 // LECTURAS ACTUALES
 //=========================================================
 
@@ -131,8 +114,21 @@ float lecturaBME = 0;
 
 unsigned long tiempoInicioCaptura;
 unsigned long ultimoMuestreo;
-
 byte contadorMuestras = 0;
+
+//=========================================================
+// VARIABLES AUXILIARES
+//=========================================================
+
+float primerMQ135;
+float primerMQ138;
+float primerBME;
+
+float mq135_1s;
+float mq138_1s;
+float bme_1s;
+
+bool pendienteCalculada = false;
 
 //=========================================================
 // RESULTADOS
@@ -155,68 +151,45 @@ enum Combustible {
 //=========================================================
 
 enum Estado {
-  ESPERANDO_REFERENCIA,
+  ESPERANDO_COMANDO,
   TOMANDO_REFERENCIA,
-  ESPERANDO_INICIO_CAPTURA,
+  ESPERANDO_INICIO_CAPTURA,  // NUEVO
   CAPTURANDO,
   CALCULANDO,
   CLASIFICANDO,
   MOSTRANDO
 };
 
-Estado estado = ESPERANDO_REFERENCIA;
+Estado estado = ESPERANDO_COMANDO;
+
 //=========================================================
 // UMBRALES
 //=========================================================
 
-struct IntervaloDecision {
-  float dieselMin;
-  float dieselMax;
-
-  float naftaMin;
-  float naftaMax;
+struct ZonaDecision {
+  float dieselSeguro;
+  float naftaSegura;
 };
 
-IntervaloDecision umbralRelacion = {
-  0.44,  // Diesel mínimo
-  0.52,  // Diesel máximo
-
-  0.70,  // Nafta mínimo (SIN la muestra 1)
-  0.82   // Nafta máximo
+ZonaDecision umbralRelacion = {
+  0.55,
+  0.65
 };
 
-IntervaloDecision umbralArea135 = {
-  3.10,
+ZonaDecision umbralArea135 = {
   3.80,
-
-  4.20,
-  7.20
+  4.40
 };
 
-IntervaloDecision umbralVar135 = {
-  30.0,
-  65.0,
-
-  95.0,
-  230.0
+ZonaDecision umbralVar135 = {
+  70.0,
+  95.0
 };
 
-IntervaloDecision umbralPendiente135 = {
-  0.10,
-  0.40,
-
-  0.70,
-  2.20
+ZonaDecision umbralPendiente135 = {
+  0.45,
+  0.65
 };
-
-//=========================================================
-// PESOS VARIABLES
-//=========================================================
-
-const byte PESO_RELACION   = 2;
-const byte PESO_AREA       = 1;
-const byte PESO_VARIACION  = 1;
-const byte PESO_PENDIENTE  = 1;
 
 //=========================================================
 // PROTOTIPOS
@@ -253,13 +226,14 @@ void resetCaptura();
 void setup() {
   Serial.begin(115200);
 
-  while (!Serial)
-    ;
+  while (!Serial);
+
   if (bme.begin()) {
     configurarBME();
 
     bmeDisponible = true;
   }
+
   Serial.println();
   Serial.println(F("==================================="));
   Serial.println(F(" OLFATUS PETROLEUM "));
@@ -275,8 +249,8 @@ void loop() {
 
   switch (estado) {
 
-    case ESPERANDO_REFERENCIA:
-
+      //-------------------------------------------------
+    case ESPERANDO_COMANDO:
       if (Serial.available()) {
         while (Serial.available())
           Serial.read();
@@ -286,8 +260,8 @@ void loop() {
 
       break;
 
+      //-------------------------------------------------
     case TOMANDO_REFERENCIA:
-
       obtenerReferencia();
 
       Serial.println();
@@ -303,10 +277,8 @@ void loop() {
       break;
 
     case ESPERANDO_INICIO_CAPTURA:
-
       if (Serial.available()) {
-        while (Serial.available())
-          Serial.read();
+        while (Serial.available()) Serial.read();
 
         iniciarCaptura();
 
@@ -315,33 +287,32 @@ void loop() {
 
       break;
 
+      //-------------------------------------------------
     case CAPTURANDO:
-
       actualizarCaptura();
 
       break;
 
+      //-------------------------------------------------
     case CALCULANDO:
-
       calcularFeatures();
 
       estado = CLASIFICANDO;
 
       break;
 
+      //-------------------------------------------------
     case CLASIFICANDO:
-
       imprimirResultado();
 
       estado = MOSTRANDO;
 
       break;
 
+      //-------------------------------------------------
     case MOSTRANDO:
-
       if (Serial.available()) {
-        while (Serial.available())
-          Serial.read();
+        while (Serial.available()) Serial.read();
 
         resetCaptura();
 
@@ -351,10 +322,6 @@ void loop() {
       break;
   }
 }
-
-//=========================================================
-// BME FUNCIONES DE FUNCIONAMIENTO
-//=========================================================
 
 void configurarBME() {
   bme.setTemperatureOversampling(BME680_OS_8X);
@@ -382,21 +349,11 @@ void gestionarBME() {
   }
 }
 
-//=========================================================
-// LECTURA SENSORES
-//=========================================================
-
 void leerSensores() {
   lecturaMQ138 = analogRead(PIN_MQ138) * (5.0 / 1023.0);
-
   lecturaMQ135 = analogRead(PIN_MQ135) * (5.0 / 1023.0);
-
   lecturaBME = bme.gas_resistance / 1000.0;
 }
-
-//=========================================================
-// TOMANDO REFERENCIA
-//=========================================================
 
 void obtenerReferencia() {
   Serial.println();
@@ -424,10 +381,6 @@ void obtenerReferencia() {
   referencia.mq138 = suma138 / N;
   referencia.bme = sumaBME / N;
 }
-
-//=========================================================
-// ESPERANDO INICIO CAPTURA
-//=========================================================
 
 void iniciarCaptura() {
   Serial.println();
@@ -457,12 +410,9 @@ void iniciarCaptura() {
   datos.areaBME = 0;
 }
 
-//=========================================================
-// CAPTURANDO
-//=========================================================
-
 void actualizarCaptura() {
-  if (millis() - ultimoMuestreo < PERIODO_MUESTREO) return;
+  if (millis() - ultimoMuestreo < PERIODO_MUESTREO)
+    return;
 
   ultimoMuestreo = millis();
 
@@ -475,7 +425,6 @@ void actualizarCaptura() {
   //--------------------------
   // MAXIMOS
   //--------------------------
-
   if (lecturaMQ135 > datos.max135) datos.max135 = lecturaMQ135;
 
   if (lecturaMQ138 > datos.max138) datos.max138 = lecturaMQ138;
@@ -485,7 +434,6 @@ void actualizarCaptura() {
   //--------------------------
   // AREAS
   //--------------------------
-
   datos.area135 += lecturaMQ135;
 
   datos.area138 += lecturaMQ138;
@@ -495,7 +443,6 @@ void actualizarCaptura() {
   //--------------------------
   // PENDIENTE
   //--------------------------
-
   if (!pendienteCalculada) {
     if (millis() - tiempoInicioCaptura >= 1000) {
       mq135_1s = lecturaMQ135;
@@ -521,15 +468,10 @@ void actualizarCaptura() {
   }
 }
 
-//=========================================================
-// CALCULANDO
-//=========================================================
-
 void calcularFeatures() {
   //-----------------------
   // Variaciones
   //-----------------------
-
   datos.variacion135 = ((datos.max135 - referencia.mq135) / referencia.mq135) * 100.0;
 
   datos.variacion138 = ((datos.max138 - referencia.mq138) / referencia.mq138) * 100.0;
@@ -537,66 +479,44 @@ void calcularFeatures() {
   //-----------------------
   // Relacion
   //-----------------------
-
   datos.relacion = datos.max138 / datos.max135;
 
   //-----------------------
   // Pendientes
   //-----------------------
-
   datos.pendiente135 = (mq135_1s - primerMQ135);
 
   datos.pendiente138 = (mq138_1s - primerMQ138);
 }
 
-//=========================================================
-// CLASIFICANDO
-//=========================================================
-
 ResultadoVariable evaluarRelacion() {
-  if (datos.relacion >= umbralRelacion.dieselMin && datos.relacion <= umbralRelacion.dieselMax) {
-    return VOTO_DIESEL;
-  }
+  if (datos.relacion <= umbralRelacion.dieselSeguro) return VOTO_DIESEL;
 
-  if (datos.relacion >= umbralRelacion.naftaMin && datos.relacion <= umbralRelacion.naftaMax) {
-    return VOTO_NAFTA;
-  }
+  if (datos.relacion >= umbralRelacion.naftaSegura) return VOTO_NAFTA;
 
   return VOTO_DUDA;
 }
 
 ResultadoVariable evaluarVariacion() {
-  if (datos.variacion135 >= umbralVar135.dieselMin && datos.variacion135 <= umbralVar135.dieselMax) {
-    return VOTO_DIESEL;
-  }
+  if (datos.variacion135 <= umbralVar135.dieselSeguro) return VOTO_DIESEL;
 
-  if (datos.variacion135 >= umbralVar135.naftaMin && datos.variacion135 <= umbralVar135.naftaMax) {
-    return VOTO_NAFTA;
-  }
+  if (datos.variacion135 >= umbralVar135.naftaSegura) return VOTO_NAFTA;
 
   return VOTO_DUDA;
 }
 
 ResultadoVariable evaluarArea() {
-  if (datos.area135 >= umbralArea135.dieselMin && datos.area135 <= umbralArea135.dieselMax) {
-    return VOTO_DIESEL;
-  }
+  if (datos.area135 <= umbralArea135.dieselSeguro) return VOTO_DIESEL;
 
-  if (datos.area135 >= umbralArea135.naftaMin && datos.area135 <= umbralArea135.naftaMax) {
-    return VOTO_NAFTA;
-  }
+  if (datos.area135 >= umbralArea135.naftaSegura) return VOTO_NAFTA;
 
   return VOTO_DUDA;
 }
 
 ResultadoVariable evaluarPendiente() {
-  if (datos.pendiente135 >= umbralPendiente135.dieselMin && datos.pendiente135 <= umbralPendiente135.dieselMax) {
-    return VOTO_DIESEL;
-  }
+  if (datos.pendiente135 <= umbralPendiente135.dieselSeguro) return VOTO_DIESEL;
 
-  if (datos.pendiente135 >= umbralPendiente135.naftaMin && datos.pendiente135 <= umbralPendiente135.naftaMax) {
-    return VOTO_NAFTA;
-  }
+  if (datos.pendiente135 >= umbralPendiente135.naftaSegura) return VOTO_NAFTA;
 
   return VOTO_DUDA;
 }
@@ -611,52 +531,44 @@ Combustible decidirFinal() {
   //-----------------------
   // Relación
   //-----------------------
-
   r = evaluarRelacion();
 
-  if (r == VOTO_DIESEL) votosDiesel += PESO_RELACION;
-  else if (r == VOTO_NAFTA) votosNafta += PESO_RELACION;
-  else votosDuda+= PESO_RELACION;
+  if (r == VOTO_DIESEL) votosDiesel++;
+  else if (r == VOTO_NAFTA) votosNafta++;
+  else votosDuda++;
 
   //-----------------------
   // Variación
   //-----------------------
-
   r = evaluarVariacion();
 
-  if (r == VOTO_DIESEL) votosDiesel += PESO_VARIACION;
-  else if (r == VOTO_NAFTA) votosNafta += PESO_VARIACION;
-  else votosDuda += PESO_VARIACION;
+  if (r == VOTO_DIESEL) votosDiesel++;
+  else if (r == VOTO_NAFTA) votosNafta++;
+  else votosDuda++;
 
   //-----------------------
   // Área
   //-----------------------
-
   r = evaluarArea();
-
-  if (r == VOTO_DIESEL) votosDiesel += PESO_AREA;
-  else if (r == VOTO_NAFTA) votosNafta += PESO_AREA;
-  else votosDuda += PESO_AREA;
+  if (r == VOTO_DIESEL) votosDiesel++;
+  else if (r == VOTO_NAFTA) votosNafta++;
+  else votosDuda++;
 
   //-----------------------
   // Pendiente
   //-----------------------
-
   r = evaluarPendiente();
 
-  if (r == VOTO_DIESEL) votosDiesel += PESO_PENDIENTE;
-  else if (r == VOTO_NAFTA) votosNafta +=PESO_PENDIENTE;
-  else votosDuda += PESO_PENDIENTE;
+  if (r == VOTO_DIESEL) votosDiesel++;
+  else if (r == VOTO_NAFTA) votosNafta++;
+  else votosDuda++;
 
   //-----------------------
   // DECISIÓN
   //-----------------------
+  if (votosNafta > votosDiesel && votosNafta > votosDuda) return NAFTA;
 
-  if (votosNafta > votosDiesel && votosNafta > votosDuda)
-    return NAFTA;
-
-  if (votosDiesel > votosNafta && votosDiesel > votosDuda)
-    return DIESEL;
+  if (votosDiesel > votosNafta && votosDiesel > votosDuda) return DIESEL;
 
   return DUDA;
 }
@@ -696,10 +608,6 @@ void imprimirResultado() {
   Serial.println(F("Envie cualquier caracter"));
   Serial.println(F("para repetir."));
 }
-
-//=========================================================
-// MOSTRANDO
-//=========================================================
 
 void resetCaptura() {
   memset(&datos, 0, sizeof(datos));

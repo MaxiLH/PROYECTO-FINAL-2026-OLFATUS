@@ -6,7 +6,7 @@
  * MAQUINA DE ESTADOS CENTRAL (Parte 2)
  *
  * Integra:
- *  - Sensores y clasificación (Parte 1 / doc1)
+ *  - Sensores y clasificación (Parte 1 / doc1)  -> VERSION 4 calibrada
  *  - Patrones de LEDs y buzzer (doc2)
  *  - Máquina de estados, electroválvulas y botón (doc5)
  *
@@ -55,16 +55,28 @@ const byte PIN_BOTON = 6;             // INPUT normal, lógica pulldown (HIGH = 
 const uint16_t PERIODO_MUESTREO = 200;    // ms, muestreo de MQ durante la extracción
 const uint16_t TIEMPO_REFERENCIA = 2000;  // ms, duración de la toma de referencia
 
+// Escala del area: promedio * 2.5, igual que la tabla de
+// calibracion. Al normalizar por cantidad de muestras, el
+// valor no cambia si se pierde alguna lectura.
+const float FACTOR_AREA = 2.5;
+
 //=========================================================
 // CONFIGURACION - MAQUINA DE ESTADOS (doc5)
 //=========================================================
 
 const float UMBRAL_LIMPIEZA_BME = 220.0;               // kOhm
-const uint32_t TIEMPO_CONFIRMACION_LIMPIEZA = 6000UL;   // ms
-const uint32_t TIEMPO_EXTRACCION = 4000UL;              // ms (también dura la captura de muestra)
+const uint32_t TIEMPO_CONFIRMACION_LIMPIEZA = 5000UL;   // ms
+
+// ATENCION: los umbrales de abajo se calibraron con capturas
+// de 5000 ms. Si se acorta este tiempo, el MQ135 no llega al
+// mismo maximo y hay que recalibrar todo de nuevo.
+const uint32_t TIEMPO_EXTRACCION = 5000UL;              // ms (también dura la captura de muestra)
+
 const uint32_t TIEMPO_EMERGENCIA = 5000UL;               // ms
 const uint32_t TIEMPO_ALERTA_INCORRECTO = 3000UL;        // ms
 const float UMBRAL_PRESION = 900.0;                      // hPa (bme.pressure / 100.0)
+
+const bool MODO_DIAGNOSTICO = true;  // imprime features y puntajes al clasificar
 
 //=========================================================
 // COMBUSTIBLE CORRECTO (configurable)
@@ -112,8 +124,10 @@ struct Features {
 
   float variacion135;
   float variacion138;
+  float variacionBME;
 
   float relacion;
+  float firma;  // variacion138 / variacion135
 };
 
 Features datos;
@@ -136,19 +150,19 @@ float lecturaMQ135 = 0;
 float lecturaMQ138 = 0;
 float lecturaBME = 0;
 
+float suma135 = 0;
+float suma138 = 0;
+float sumaBME = 0;
+
 unsigned long tiempoInicioCaptura;
 unsigned long ultimoMuestreo;
 byte contadorMuestras = 0;
 
+bool bmeValidoEnCaptura = false;
+
 //=========================================================
 // RESULTADOS (doc1)
 //=========================================================
-
-enum ResultadoVariable {
-  VOTO_DIESEL,
-  VOTO_DUDA,
-  VOTO_NAFTA
-};
 
 enum Combustible {
   DIESEL,
@@ -156,60 +170,122 @@ enum Combustible {
   DUDA
 };
 
+enum MotivoDuda {
+  SIN_MOTIVO,
+  SIN_MUESTRA,
+  FIRMA_INCOMPATIBLE,
+  FUERA_DE_RANGO,
+  INCOHERENCIA,
+  ZONA_GRIS
+};
+
 Combustible resultadoActual;
+MotivoDuda motivo = SIN_MOTIVO;
 
 //=========================================================
-// UMBRALES (doc1)
+// MODELO DE CADA VARIABLE (doc1 - VERSION 4)
+//
+//  <= dieselMax .......... puntaje -1
+//  >= naftaMin ........... puntaje +1
+//  entre medio ........... rampa lineal (zona gris)
+//
+//  fuera de limiteInf..limiteSup -> la variable NO vota
+//
+//  Rangos medidos (10 muestras de diesel / 10 de nafta):
+//
+//    relacion   diesel 0.46 - 0.48    nafta 0.72 - 1.00
+//    area135    diesel 3.25 - 3.66    nafta 4.39 - 6.19
+//    var135     diesel 35.7 - 57.4    nafta 108  - 205
+//    pend135    diesel 0.13 - 0.34    nafta 0.53 - 1.47
+//    varBME     diesel 33.0 - 52.0    nafta 73.4 - 90.3
 //=========================================================
 
-struct IntervaloDecision {
-  float dieselMin;
+struct Modelo {
+  float limiteInf;
   float dieselMax;
-
   float naftaMin;
-  float naftaMax;
+  float limiteSup;
 };
 
-IntervaloDecision umbralRelacion = {
-  0.44,
-  0.52,
-
-  0.70,
-  0.82
-};
-
-IntervaloDecision umbralArea135 = {
-  3.10,
-  3.80,
-
-  4.20,
-  7.20
-};
-
-IntervaloDecision umbralVar135 = {
-  30.0,
-  65.0,
-
-  95.0,
-  230.0
-};
-
-IntervaloDecision umbralPendiente135 = {
-  0.10,
-  0.40,
-
-  0.70,
-  2.20
-};
+//                   limInf  dieselMax  naftaMin  limSup
+Modelo mRelacion  = { 0.36,   0.55,      0.66,     1.15 };
+Modelo mArea135   = { 2.40,   3.95,      4.15,     7.60 };
+Modelo mVar135    = { 22.0,   70.0,      95.0,     265.0 };
+Modelo mPendiente = { 0.05,   0.42,      0.48,     1.90 };
+Modelo mVarBME    = { 22.0,   60.0,      67.0,     96.0 };
 
 //=========================================================
-// PESOS VARIABLES (doc1)
+// FIRMA DE COMBUSTIBLE
+//
+//  variacion138 / variacion135
+//
+//  Medido:  diesel 2.00 - 2.32    nafta 2.12 - 2.78
+//
+//  No distingue diesel de nafta, pero si distingue un
+//  combustible de otra cosa: un compuesto que ataca
+//  desproporcionadamente a uno de los dos MQ (alcohol,
+//  solventes) se va de este rango.
 //=========================================================
 
-const byte PESO_RELACION   = 2;
-const byte PESO_AREA       = 1;
-const byte PESO_VARIACION  = 1;
-const byte PESO_PENDIENTE  = 1;
+const float FIRMA_MIN = 1.65;
+const float FIRMA_MAX = 3.40;
+
+//=========================================================
+// PESOS VARIABLES (doc1 - VERSION 4)
+//=========================================================
+
+const byte PESO_RELACION  = 3;
+const byte PESO_VARBME    = 2;
+const byte PESO_AREA      = 1;
+const byte PESO_VARIACION = 1;
+const byte PESO_PENDIENTE = 1;
+
+//=========================================================
+// CRITERIOS DE DECISION
+//=========================================================
+
+// Fraccion del peso disponible que tiene que haber votado
+const float FRACCION_MINIMA_VALIDA = 0.66;
+
+// Cuanto tiene que inclinarse el puntaje global (-1 .. +1)
+const float UMBRAL_CONFIANZA = 0.40;
+
+// Peso que, votando fuerte en contra, invalida la decision
+const byte PESO_CONTRADICCION = 2;
+
+// Debajo de esta variacion se asume que no hay muestra
+const float VARIACION_MINIMA = 15.0;  // %
+
+// Referencia minima del MQ138 para confiar en la firma
+const float REF138_MINIMA = 0.05;
+
+//=========================================================
+// VOTOS
+//=========================================================
+
+struct Voto {
+  float puntaje;
+  bool valido;
+  bool participa;
+};
+
+const byte N_VARIABLES = 5;
+
+Voto votos[N_VARIABLES];
+
+const char *nombresVariables[N_VARIABLES] = {
+  "Relacion",
+  "VarBME  ",
+  "Area135 ",
+  "Var135  ",
+  "Pend135 "
+};
+
+float valoresVariables[N_VARIABLES];
+
+float puntajeGlobal = 0;
+byte pesoValido = 0;
+byte pesoDisponible = 0;
 
 //=========================================================
 // INTERFAZ - VARIABLES DE PATRONES (doc2)
@@ -293,11 +369,9 @@ void finalizarTomaReferencia();
 void procesarConfirmacionLimpieza();
 
 void calcularFeatures();
-ResultadoVariable evaluarRelacion();
-ResultadoVariable evaluarArea();
-ResultadoVariable evaluarVariacion();
-ResultadoVariable evaluarPendiente();
+Voto evaluarVariable(float valor, const Modelo &m);
 Combustible decidirFinal();
+void imprimirDiagnostico();
 
 void setLED(byte azul, byte amarillo, byte rojo);
 void actualizarBeep();
@@ -391,7 +465,7 @@ void loop() {
       break;
 
     case Estado::ANALIZANDO:
-     Serial.println("ANALIZANDO");
+      Serial.println("ANALIZANDO");
       // La clasificación se resuelve de forma instantánea en entrarEstado()
       break;
 
@@ -462,6 +536,8 @@ void entrarEstado(Estado e) {
 
       calcularFeatures();
       resultadoActual = decidirFinal();
+
+      if (MODO_DIAGNOSTICO) imprimirDiagnostico();
 
       switch (resultadoActual) {
         case DIESEL: cambiarEstado(Estado::DIESEL); break;
@@ -628,9 +704,11 @@ void finalizarTomaReferencia() {
 
 void iniciarCaptura() {
   tiempoInicioCaptura = millis();
-  ultimoMuestreo = 0;
+  ultimoMuestreo = millis();
   contadorMuestras = 0;
   pendienteCalculada = false;
+
+  bmeValidoEnCaptura = bmeDisponible;
 
   leerSensores();
 
@@ -646,6 +724,10 @@ void iniciarCaptura() {
   datos.area135 = 0;
   datos.area138 = 0;
   datos.areaBME = 0;
+
+  suma135 = 0;
+  suma138 = 0;
+  sumaBME = 0;
 }
 
 void procesarExtraccion() {
@@ -660,15 +742,17 @@ void procesarExtraccion() {
 
   leerSensores();
 
+  if (!bmeDisponible) bmeValidoEnCaptura = false;
+
   contadorMuestras++;
 
   if (lecturaMQ135 > datos.max135) datos.max135 = lecturaMQ135;
   if (lecturaMQ138 > datos.max138) datos.max138 = lecturaMQ138;
   if (lecturaBME < datos.minBME) datos.minBME = lecturaBME;
 
-  datos.area135 += lecturaMQ135;
-  datos.area138 += lecturaMQ138;
-  datos.areaBME += (referencia.bme - lecturaBME);
+  suma135 += lecturaMQ135;
+  suma138 += lecturaMQ138;
+  sumaBME += (referencia.bme - lecturaBME);
 
   if (!pendienteCalculada) {
     if (millis() - tiempoInicioCaptura >= 1000) {
@@ -686,9 +770,11 @@ void procesarExtraccion() {
 }
 
 void finalizarExtraccion() {
-  datos.area135 *= 0.1;
-  datos.area138 *= 0.1;
-  datos.areaBME *= 0.1;
+  if (contadorMuestras > 0) {
+    datos.area135 = (suma135 / contadorMuestras) * FACTOR_AREA;
+    datos.area138 = (suma138 / contadorMuestras) * FACTOR_AREA;
+    datos.areaBME = (sumaBME / contadorMuestras) * FACTOR_AREA;
+  }
 
   cambiarEstado(Estado::ANALIZANDO);
 }
@@ -729,94 +815,274 @@ void gestionarBME() {
 void leerSensores() {
   lecturaMQ138 = analogRead(PIN_MQ138) * (5.0 / 1023.0);
   lecturaMQ135 = analogRead(PIN_MQ135) * (5.0 / 1023.0);
-  lecturaBME = bme.gas_resistance / 1000.0;
+
+  if (bmeDisponible) {
+    lecturaBME = bme.gas_resistance / 1000.0;
+  }
 }
 
 //=========================================================
-// CLASIFICACION (doc1)
+// CLASIFICACION (doc1 - VERSION 4)
 //=========================================================
 
 void calcularFeatures() {
   datos.variacion135 = ((datos.max135 - referencia.mq135) / referencia.mq135) * 100.0;
-  datos.variacion138 = ((datos.max138 - referencia.mq138) / referencia.mq138) * 100.0;
+
+  if (referencia.mq138 > REF138_MINIMA) {
+    datos.variacion138 = ((datos.max138 - referencia.mq138) / referencia.mq138) * 100.0;
+  } else {
+    datos.variacion138 = -1;  // no confiable
+  }
+
+  if (bmeValidoEnCaptura && referencia.bme > 1.0) {
+    datos.variacionBME = ((referencia.bme - datos.minBME) / referencia.bme) * 100.0;
+  } else {
+    datos.variacionBME = -1;
+  }
 
   datos.relacion = datos.max138 / datos.max135;
 
-  datos.pendiente135 = (mq135_1s - primerMQ135);
-  datos.pendiente138 = (mq138_1s - primerMQ138);
+  if (datos.variacion138 > 0 && datos.variacion135 > 1.0) {
+    datos.firma = datos.variacion138 / datos.variacion135;
+  } else {
+    datos.firma = -1;  // no evaluable
+  }
+
+  if (pendienteCalculada) {
+    datos.pendiente135 = (mq135_1s - primerMQ135);
+    datos.pendiente138 = (mq138_1s - primerMQ138);
+  } else {
+    datos.pendiente135 = -999;  // fuerza abstencion
+    datos.pendiente138 = -999;
+  }
 }
 
-ResultadoVariable evaluarRelacion() {
-  if (datos.relacion >= umbralRelacion.dieselMin && datos.relacion <= umbralRelacion.dieselMax) {
-    return VOTO_DIESEL;
-  }
-  if (datos.relacion >= umbralRelacion.naftaMin && datos.relacion <= umbralRelacion.naftaMax) {
-    return VOTO_NAFTA;
-  }
-  return VOTO_DUDA;
-}
+//---------------------------------------------------------
+// Puntaje continuo de una variable:
+//   -1 = diesel puro, +1 = nafta pura
+//   valido = false -> el valor no se parece a ningun
+//                     combustible, la variable no vota
+//---------------------------------------------------------
 
-ResultadoVariable evaluarVariacion() {
-  if (datos.variacion135 >= umbralVar135.dieselMin && datos.variacion135 <= umbralVar135.dieselMax) {
-    return VOTO_DIESEL;
-  }
-  if (datos.variacion135 >= umbralVar135.naftaMin && datos.variacion135 <= umbralVar135.naftaMax) {
-    return VOTO_NAFTA;
-  }
-  return VOTO_DUDA;
-}
+Voto evaluarVariable(float valor, const Modelo &m) {
+  Voto v;
 
-ResultadoVariable evaluarArea() {
-  if (datos.area135 >= umbralArea135.dieselMin && datos.area135 <= umbralArea135.dieselMax) {
-    return VOTO_DIESEL;
-  }
-  if (datos.area135 >= umbralArea135.naftaMin && datos.area135 <= umbralArea135.naftaMax) {
-    return VOTO_NAFTA;
-  }
-  return VOTO_DUDA;
-}
+  v.puntaje = 0;
+  v.valido = true;
+  v.participa = true;
 
-ResultadoVariable evaluarPendiente() {
-  if (datos.pendiente135 >= umbralPendiente135.dieselMin && datos.pendiente135 <= umbralPendiente135.dieselMax) {
-    return VOTO_DIESEL;
+  if (valor < m.limiteInf || valor > m.limiteSup) {
+    v.valido = false;
+    return v;
   }
-  if (datos.pendiente135 >= umbralPendiente135.naftaMin && datos.pendiente135 <= umbralPendiente135.naftaMax) {
-    return VOTO_NAFTA;
+
+  if (valor <= m.dieselMax) {
+    v.puntaje = -1.0;
+    return v;
   }
-  return VOTO_DUDA;
+
+  if (valor >= m.naftaMin) {
+    v.puntaje = 1.0;
+    return v;
+  }
+
+  float t = (valor - m.dieselMax) / (m.naftaMin - m.dieselMax);
+
+  v.puntaje = (2.0 * t) - 1.0;
+
+  return v;
 }
 
 Combustible decidirFinal() {
-  byte votosDiesel = 0;
-  byte votosNafta = 0;
-  byte votosDuda = 0;
+  motivo = SIN_MOTIVO;
 
-  ResultadoVariable r;
+  puntajeGlobal = 0;
+  pesoValido = 0;
+  pesoDisponible = 0;
 
-  r = evaluarRelacion();
-  if (r == VOTO_DIESEL) votosDiesel += PESO_RELACION;
-  else if (r == VOTO_NAFTA) votosNafta += PESO_RELACION;
-  else votosDuda += PESO_RELACION;
+  for (byte i = 0; i < N_VARIABLES; i++) {
+    votos[i].puntaje = 0;
+    votos[i].valido = false;
+    votos[i].participa = false;
+  }
 
-  r = evaluarVariacion();
-  if (r == VOTO_DIESEL) votosDiesel += PESO_VARIACION;
-  else if (r == VOTO_NAFTA) votosNafta += PESO_VARIACION;
-  else votosDuda += PESO_VARIACION;
+  valoresVariables[0] = datos.relacion;
+  valoresVariables[1] = datos.variacionBME;
+  valoresVariables[2] = datos.area135;
+  valoresVariables[3] = datos.variacion135;
+  valoresVariables[4] = datos.pendiente135;
 
-  r = evaluarArea();
-  if (r == VOTO_DIESEL) votosDiesel += PESO_AREA;
-  else if (r == VOTO_NAFTA) votosNafta += PESO_AREA;
-  else votosDuda += PESO_AREA;
+  //-----------------------
+  // 1) Hay muestra?
+  //-----------------------
 
-  r = evaluarPendiente();
-  if (r == VOTO_DIESEL) votosDiesel += PESO_PENDIENTE;
-  else if (r == VOTO_NAFTA) votosNafta += PESO_PENDIENTE;
-  else votosDuda += PESO_PENDIENTE;
+  if (datos.variacion135 < VARIACION_MINIMA) {
+    motivo = SIN_MUESTRA;
+    return DUDA;
+  }
 
-  if (votosNafta > votosDiesel && votosNafta > votosDuda) return NAFTA;
-  if (votosDiesel > votosNafta && votosDiesel > votosDuda) return DIESEL;
+  //-----------------------
+  // 2) Firma de combustible
+  //-----------------------
+
+  if (datos.firma > 0) {
+    if (datos.firma < FIRMA_MIN || datos.firma > FIRMA_MAX) {
+      motivo = FIRMA_INCOMPATIBLE;
+      return DUDA;
+    }
+  }
+
+  //-----------------------
+  // 3) Puntaje de cada variable
+  //-----------------------
+
+  byte pesos[N_VARIABLES] = {
+    PESO_RELACION,
+    PESO_VARBME,
+    PESO_AREA,
+    PESO_VARIACION,
+    PESO_PENDIENTE
+  };
+
+  votos[0] = evaluarVariable(datos.relacion, mRelacion);
+
+  if (datos.variacionBME >= 0) {
+    votos[1] = evaluarVariable(datos.variacionBME, mVarBME);
+  }
+
+  votos[2] = evaluarVariable(datos.area135, mArea135);
+  votos[3] = evaluarVariable(datos.variacion135, mVar135);
+  votos[4] = evaluarVariable(datos.pendiente135, mPendiente);
+
+  //-----------------------
+  // 4) Acumulacion ponderada
+  //-----------------------
+
+  float suma = 0;
+
+  byte pesoFuerteDiesel = 0;
+  byte pesoFuerteNafta = 0;
+
+  for (byte i = 0; i < N_VARIABLES; i++) {
+    if (!votos[i].participa) continue;
+
+    pesoDisponible += pesos[i];
+
+    if (!votos[i].valido) continue;
+
+    suma += votos[i].puntaje * pesos[i];
+
+    pesoValido += pesos[i];
+
+    if (votos[i].puntaje <= -0.6) pesoFuerteDiesel += pesos[i];
+    if (votos[i].puntaje >= 0.6) pesoFuerteNafta += pesos[i];
+  }
+
+  //-----------------------
+  // 5) Alcanza la evidencia?
+  //-----------------------
+
+  if (pesoValido < (pesoDisponible * FRACCION_MINIMA_VALIDA)) {
+    motivo = FUERA_DE_RANGO;
+    return DUDA;
+  }
+
+  puntajeGlobal = suma / pesoValido;
+
+  //-----------------------
+  // 6) Se contradicen entre si?
+  //-----------------------
+
+  byte contradiccion = (pesoFuerteDiesel < pesoFuerteNafta) ? pesoFuerteDiesel : pesoFuerteNafta;
+
+  if (contradiccion >= PESO_CONTRADICCION) {
+    motivo = INCOHERENCIA;
+    return DUDA;
+  }
+
+  //-----------------------
+  // 7) Decision por confianza
+  //-----------------------
+
+  if (puntajeGlobal <= -UMBRAL_CONFIANZA) return DIESEL;
+
+  if (puntajeGlobal >= UMBRAL_CONFIANZA) return NAFTA;
+
+  motivo = ZONA_GRIS;
 
   return DUDA;
+}
+
+//=========================================================
+// DIAGNOSTICO POR SERIAL
+//=========================================================
+
+void imprimirDiagnostico() {
+  Serial.println();
+  Serial.println(F("---- DIAGNOSTICO ----"));
+
+  switch (resultadoActual) {
+    case DIESEL: Serial.println(F("RESULTADO: DIESEL")); break;
+    case NAFTA:  Serial.println(F("RESULTADO: NAFTA")); break;
+    case DUDA:
+      Serial.println(F("RESULTADO: DUDA"));
+
+      switch (motivo) {
+        case SIN_MUESTRA:        Serial.println(F("No se detecto muestra")); break;
+        case FIRMA_INCOMPATIBLE: Serial.println(F("No responde como combustible")); break;
+        case FUERA_DE_RANGO:     Serial.println(F("Valores fuera de rango conocido")); break;
+        case INCOHERENCIA:       Serial.println(F("Los sensores se contradicen")); break;
+        case ZONA_GRIS:          Serial.println(F("Evidencia insuficiente")); break;
+        default: break;
+      }
+
+      break;
+  }
+
+  Serial.print(F("Ref  135/138/BME = "));
+  Serial.print(referencia.mq135, 2);
+  Serial.print(F(" / "));
+  Serial.print(referencia.mq138, 2);
+  Serial.print(F(" / "));
+  Serial.println(referencia.bme, 1);
+
+  Serial.print(F("Max  135/138     = "));
+  Serial.print(datos.max135, 2);
+  Serial.print(F(" / "));
+  Serial.println(datos.max138, 2);
+
+  Serial.print(F("Var138 = "));
+  Serial.print(datos.variacion138, 1);
+  Serial.print(F("   Firma = "));
+  Serial.println(datos.firma, 2);
+
+  Serial.print(F("Muestras = "));
+  Serial.println(contadorMuestras);
+
+  for (byte i = 0; i < N_VARIABLES; i++) {
+    Serial.print(nombresVariables[i]);
+    Serial.print(F(" = "));
+    Serial.print(valoresVariables[i], 3);
+    Serial.print(F("  -> "));
+
+    if (!votos[i].participa) {
+      Serial.println(F("no disponible"));
+    } else if (!votos[i].valido) {
+      Serial.println(F("FUERA DE RANGO (no vota)"));
+    } else {
+      Serial.println(votos[i].puntaje, 2);
+    }
+  }
+
+  Serial.print(F("Peso valido = "));
+  Serial.print(pesoValido);
+  Serial.print(F(" / "));
+  Serial.println(pesoDisponible);
+
+  Serial.print(F("Puntaje global = "));
+  Serial.println(puntajeGlobal, 3);
+
+  Serial.println(F("---------------------"));
 }
 
 //=========================================================
