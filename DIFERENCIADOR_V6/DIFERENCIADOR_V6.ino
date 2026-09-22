@@ -227,10 +227,10 @@ struct Intervalo {
 };
 
 //                      dslMin  dslMax  nafMin   nafMax
-Intervalo iRelacion  = {  0.86,   1.20,   1.30,    1.8 };
+Intervalo iRelacion  = {  0.75,  1.0,   1.1,    1.6 };
 Intervalo iVarBME    = { 0.00,  60.00,  67.00,   105.00 };
 Intervalo iArea135   = {  1.40,   3.95,   4.15,    7.60 };
-Intervalo iVar135    = { 22.00,  70.00,  95.00,  295.00 };
+Intervalo iVar135    = { 22.00,  70.00,  95.00,  950.00 };
 Intervalo iPendiente = {  0.05,   0.42,   0.48,    1.90 };
 
 //=========================================================
