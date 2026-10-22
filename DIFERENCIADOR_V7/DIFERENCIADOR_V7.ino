@@ -44,6 +44,10 @@ Adafruit_BME680 bme(&Wire);
 const byte PIN_MQ138 = A3;
 const byte PIN_MQ135 = A2;
 
+// Definición de los pines para las válvulas
+const int pinValvulaEntrada = 8;
+const int pinValvulaSalida = 12;
+
 //=========================================================
 // CONFIGURACION DE CAPTURA
 //
@@ -227,7 +231,7 @@ struct Intervalo {
 };
 
 //                      dslMin  dslMax  nafMin   nafMax
-Intervalo iRelacion = { 0.75, 1.1, 1.2, 1.8 };
+Intervalo iRelacion = { 0.6, 1.1, 1.2, 1.8 };
 Intervalo iVarBME = { -10.00, 60.00, 67.00, 105.00 };
 Intervalo iArea135 = { 1.40, 3.95, 4.15, 7.60 };
 Intervalo iVar135 = {-5.00, 70.00, 80.00, 950.00 };
@@ -360,6 +364,16 @@ void setup() {
   Serial.println();
   Serial.println(F("Envie cualquier caracter"));
   Serial.println(F("para comenzar."));
+
+  pinMode(pinValvulaEntrada, OUTPUT);
+  pinMode(pinValvulaSalida, OUTPUT);
+
+  digitalWrite(pinValvulaEntrada, LOW);
+  digitalWrite(pinValvulaSalida, LOW);
+  delay(1000);
+
+  digitalWrite(pinValvulaEntrada, HIGH);
+  digitalWrite(pinValvulaSalida, HIGH);
 }
 
 //=========================================================

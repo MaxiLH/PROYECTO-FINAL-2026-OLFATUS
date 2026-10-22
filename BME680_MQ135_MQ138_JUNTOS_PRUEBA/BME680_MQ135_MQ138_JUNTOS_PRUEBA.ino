@@ -52,9 +52,9 @@ void setup() {
 }
 
 void loop() {
-  int adc_MQ = analogRead(A0); //Lemos la salida analógica del MQ
+  int adc_MQ = analogRead(A2); //Lemos la salida analógica del MQ
   float voltaje = adc_MQ * (5.0 / 1023.0); //Convertimos la lectura en un valor de voltaje
-  int adc_MQ1 = analogRead(A2); //Lemos la salida analógica del MQ
+  int adc_MQ1 = analogRead(A3); //Lemos la salida analógica del MQ
   float voltaje2 = adc_MQ1 * (5.0 / 1023.0); //Convertimos la lectura en un valor de voltaje
   verificacion_lectura_bme();
 
@@ -90,6 +90,16 @@ void loop() {
 
   Serial.println();
   delay(200);
+
+  pinMode(pinValvulaEntrada, OUTPUT);
+  pinMode(pinValvulaSalida, OUTPUT);
+
+  digitalWrite(pinValvulaEntrada, LOW);
+  digitalWrite(pinValvulaSalida, LOW);
+  delay(1000);
+
+  digitalWrite(pinValvulaEntrada, HIGH);
+  digitalWrite(pinValvulaSalida, HIGH);
 }
 
 void verificacion_lectura_bme(){
