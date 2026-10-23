@@ -65,12 +65,12 @@ const float FACTOR_AREA = 2.5;
 //=========================================================
 
 const float UMBRAL_LIMPIEZA_BME = 220.0;               // kOhm
-const uint32_t TIEMPO_CONFIRMACION_LIMPIEZA = 5000UL;   // ms
+const uint32_t TIEMPO_CONFIRMACION_LIMPIEZA = 120000UL;   // ms
 
 // ATENCION: los umbrales de abajo se calibraron con capturas
 // de 5000 ms. Si se acorta este tiempo, el MQ135 no llega al
 // mismo maximo y hay que recalibrar todo de nuevo.
-const uint32_t TIEMPO_EXTRACCION = 5000UL;              // ms (también dura la captura de muestra)
+const uint32_t TIEMPO_EXTRACCION = 15000UL;              // ms (también dura la captura de muestra)
 
 const uint32_t TIEMPO_EMERGENCIA = 5000UL;               // ms
 const uint32_t TIEMPO_ALERTA_INCORRECTO = 3000UL;        // ms
@@ -208,11 +208,11 @@ struct Modelo {
 };
 
 //                   limInf  dieselMax  naftaMin  limSup
-Modelo mRelacion  = { 0.36,   0.55,      0.66,     1.15 };
-Modelo mArea135   = { 2.40,   3.95,      4.15,     7.60 };
-Modelo mVar135    = { 22.0,   70.0,      95.0,     265.0 };
-Modelo mPendiente = { 0.05,   0.42,      0.48,     1.90 };
-Modelo mVarBME    = { 22.0,   60.0,      67.0,     96.0 };
+Modelo mRelacion  = {  0.6, 1.1, 1.2, 1.8};
+Modelo mArea135   = { 1.40, 3.95, 4.15, 7.60 };
+Modelo mVar135    = { -5.00, 70.00, 80.00, 950.00 };
+Modelo mPendiente = { 0.00, 0.42, 0.48, 1.90 };
+Modelo mVarBME    = { -10.00, 60.00, 67.00, 105.00 };
 
 //=========================================================
 // FIRMA DE COMBUSTIBLE

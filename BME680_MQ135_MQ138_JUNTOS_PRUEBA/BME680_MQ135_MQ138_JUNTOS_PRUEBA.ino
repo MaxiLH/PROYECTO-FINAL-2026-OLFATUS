@@ -33,6 +33,10 @@ Adafruit_BME680 bme(&Wire); // I2C
 //Adafruit_BME680 bme(BME_CS); // hardware SPI
 //Adafruit_BME680 bme(BME_CS, BME_MOSI, BME_MISO,  BME_SCK);
 
+// Definición de los pines para las válvulas
+const int pinValvulaEntrada = 8;
+const int pinValvulaSalida = 12;
+
 void setup() {
   Serial.begin(112500);
   while (!Serial);
@@ -49,6 +53,15 @@ void setup() {
   bme.setPressureOversampling(BME680_OS_4X);
   bme.setIIRFilterSize(BME680_FILTER_SIZE_3);
   bme.setGasHeater(320, 150); // 320*C for 150 ms
+  pinMode(pinValvulaEntrada, OUTPUT);
+  pinMode(pinValvulaSalida, OUTPUT);
+
+  digitalWrite(pinValvulaEntrada, LOW);
+  digitalWrite(pinValvulaSalida, LOW);
+  delay(1000);
+
+  digitalWrite(pinValvulaEntrada, HIGH);
+  digitalWrite(pinValvulaSalida, HIGH);
 }
 
 void loop() {
@@ -90,16 +103,6 @@ void loop() {
 
   Serial.println();
   delay(200);
-
-  pinMode(pinValvulaEntrada, OUTPUT);
-  pinMode(pinValvulaSalida, OUTPUT);
-
-  digitalWrite(pinValvulaEntrada, LOW);
-  digitalWrite(pinValvulaSalida, LOW);
-  delay(1000);
-
-  digitalWrite(pinValvulaEntrada, HIGH);
-  digitalWrite(pinValvulaSalida, HIGH);
 }
 
 void verificacion_lectura_bme(){
