@@ -1222,23 +1222,19 @@ void setLED(byte azul, byte amarillo, byte rojo) {
   analogWrite(LED_ROJO, rojo);
 }
 
-void patronLimpieza() {
-  if (millis() - tiempoUI < 15) return;
+void  patronLimpieza() {
+  if (millis() - tiempoUI < 250) return; // Intervalo de cambio entre estados (250 ms)
   tiempoUI = millis();
 
-  static int brillo = 40;
-  static int dir = 1;
+  static byte paso = 0;
+  paso = (paso + 1) % 6; // Secuencia cíclica de 6 pasos
 
-  brillo += dir;
+  // Simula el desfase original usando solo estados DIGITALES (HIGH / LOW)
+  bool azul     = (paso == 0 || paso == 1 || paso == 5);
+  bool amarillo = (paso == 1 || paso == 2 || paso == 3);
+  bool rojo     = (paso == 3 || paso == 4 || paso == 5);
 
-  if (brillo >= 255) dir = -1;
-  if (brillo <= 40) dir = 1;
-
-  byte azul = brillo;
-  byte amarillo = map((brillo + 85) % 255, 0, 255, 40, 255);
-  byte rojo = map((brillo + 170) % 255, 0, 255, 40, 255);
-
-  setLED(azul, amarillo, rojo);
+  setLED(azul ? 255 : 0, amarillo ? 255 : 0, rojo ? 255 : 0);
 }
 
 void patronListo() {
