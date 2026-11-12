@@ -244,8 +244,16 @@ struct Intervalo {
 //  en DUDA ENCIMA.
 //
 //                      dslMin  dslMax  nafMin   nafMax
-Intervalo iRelacion = { 0.6, 1.23, 1.24, 10.0 };
-Intervalo iVarBME = { -10.00, 40.00, 41.00, 105.00 };
+// iRelacion 1.10 / 1.10 desde el 05/11/2026, igual que el programa
+// completo 7.3 (antes 1.23 / 1.24): con naftas seguidas la referencia
+// se contamina y la nafta daba 1.14-1.24.
+Intervalo iRelacion = { 0.6, 1.10, 1.10, 10.0 };
+// iVarBME (05/11/2026): techo del diesel 40 -> 60, igual que
+// el programa completo. Con diesel daba 37.8-51.5 por el tope
+// de 655 kOhm del BME (ver capturarMuestras), no por la
+// muestra. Nafta: 88-92 en el programa completo, 65.4 aca.
+// Antes: { -10.00, 40.00, 41.00, 105.00 }
+Intervalo iVarBME = { -10.00, 60.00, 61.00, 105.00 };
 // iArea135 aproximado con las pruebas del 03/11/2026
 // (limpiezas de 1 minuto): diesel 2.56 / 2.76, nafta 3.18.
 // Antes era { 1.40, 3.3, 3.40, 7.60 } y la nafta caia en
@@ -588,15 +596,17 @@ void capturarMuestras() {
     curvaMQ138[i] = (uint16_t)(mq138 * 1000);
     curvaMQ135[i] = (uint16_t)(mq135 * 1000);
 
-    // El uint16_t se desborda arriba de 655.35 kohm.
-    // Se recorta para no guardar basura. Conviene agregar
-    // estas dos lineas tambien en el adquisidor.
+    // El BME se guarda en kOhm x 10 (hasta 6553.5 kOhm).
+    // Antes era x 100 con tope en 655 kOhm, pero en aire
+    // limpio el BME da 900-1350 kOhm: con diesel el minimo
+    // quedaba clavado en 655 y el VarBME salia de la
+    // referencia, no de la muestra.
     float gas = resistenciaGas;
 
     if (isnan(gas) || gas < 0) gas = 0;
-    if (gas > 655.0) gas = 655.0;
+    if (gas > 6553.0) gas = 6553.0;
 
-    curvaBME[i] = (uint16_t)(gas * 100);
+    curvaBME[i] = (uint16_t)(gas * 10);
 
     delay(PERIODO_MUESTREO);
   }
@@ -617,7 +627,7 @@ void capturarMuestras() {
 void calcularFeatures() {
   datos.max138 = curvaMQ138[0] / 1000.0;
   datos.max135 = curvaMQ135[0] / 1000.0;
-  datos.minBME = curvaBME[0] / 100.0;
+  datos.minBME = curvaBME[0] / 10.0;
 
   float suma138 = 0;
   float suma135 = 0;
@@ -626,7 +636,7 @@ void calcularFeatures() {
   for (byte i = 0; i < NUM_MUESTRAS; i++) {
     float mq138 = curvaMQ138[i] / 1000.0;
     float mq135 = curvaMQ135[i] / 1000.0;
-    float gas = curvaBME[i] / 100.0;
+    float gas = curvaBME[i] / 10.0;
 
     if (mq138 > datos.max138) datos.max138 = mq138;
     if (mq135 > datos.max135) datos.max135 = mq135;

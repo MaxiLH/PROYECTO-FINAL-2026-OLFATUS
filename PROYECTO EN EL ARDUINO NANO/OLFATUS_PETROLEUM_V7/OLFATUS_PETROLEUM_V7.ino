@@ -21,6 +21,23 @@
  *
  *  MQ138 confirmado en A3 (no A0).
  *
+ *  VERSION 7.2 (05/11/2026):
+ *   - Aviso 5 s antes de tomar la referencia (un pitido por segundo)
+ *   - Se imprimen las referencias al tomarlas
+ *   - BME guardado sin el tope de 655 kOhm
+ *   - VarBME: techo del diesel 60 (antes 40)
+ *   - DUDA: 2 pitidos (antes 1, igual que combustible correcto)
+ *   - Combustible incorrecto: LED del combustible + LED rojo
+ *   - Tiempos iguales a la 7.0: limpieza 60 s, 25 muestras cada
+ *     200 ms (la captura real dura ~9,25 s porque cada lectura del
+ *     BME frena el programa ~370 ms). La 7.1 tenia limpieza de 45 s
+ *     y extraccion de 3 s, y no funciono bien.
+ *
+ *  VERSION 7.3 (05/11/2026):
+ *   - Relacion: techo del diesel y piso de la nafta en 1.10 (antes
+ *     1.23 / 1.24): con naftas seguidas la referencia se contamina
+ *   - Limpieza de 1 min 5 s (antes 60 s)
+ *
  * Santino Leguizamo
  * Constantino Guagnini
  * Maximiliano Huang
@@ -71,6 +88,11 @@ const byte PIN_BOTON = 6;             // INPUT normal, lógica pulldown (HIGH = 
 #define NUM_MUESTRAS 25
 #define PERIODO_MUESTREO 200  // ms nominal entre muestras
 
+// El BME se guarda en la curva en kOhm x 10 (entra en un
+// uint16_t hasta 6553.5 kOhm)
+const float ESCALA_BME = 10.0;
+const float BME_MAXIMO = 6553.0;  // kOhm
+
 // Indice usado para la pendiente inicial (igual que el adquisidor)
 const byte INDICE_PENDIENTE = 5;
 const float TIEMPO_PENDIENTE = (INDICE_PENDIENTE * PERIODO_MUESTREO) / 1000.0;
@@ -84,12 +106,17 @@ const uint16_t PERIODO_REFERENCIA = 100;  // ms nominal entre lecturas
 
 const bool MODO_DIAGNOSTICO = true;
 
+// Se imprime en el cartel de arranque. log_a_excel.ps1 lo usa
+// para separar en el Excel las pruebas de cada version.
+#define VERSION_PROGRAMA "7.3 (05/11/2026)"
+
 //=========================================================
 // CONFIGURACION - MAQUINA DE ESTADOS (doc5)
 //=========================================================
 
 const float UMBRAL_LIMPIEZA_BME = 220.0;               // kOhm
-const uint32_t TIEMPO_CONFIRMACION_LIMPIEZA = 6000UL;   // ms
+const uint32_t TIEMPO_CONFIRMACION_LIMPIEZA = 65000UL;   // ms (1 min 5 s desde la 7.3; antes 60 s)
+const uint32_t TIEMPO_AVISO_REFERENCIA = 5000UL;         // ms: aviso antes de tomar la referencia
 const uint32_t TIEMPO_EMERGENCIA = 5000UL;              // ms
 const uint32_t TIEMPO_ALERTA_INCORRECTO = 3000UL;       // ms
 const float UMBRAL_PRESION = 900.0;                     // hPa (bme.pressure / 100.0)
@@ -115,6 +142,8 @@ float temperatura = 0;
 float humedad = 0;
 float presion = 0;
 float resistenciaGas = 0;
+
+bool hayLecturaBME = false;  // ya hubo al menos una lectura valida
 
 //=========================================================
 // REFERENCIAS
@@ -160,7 +189,7 @@ Features datos;
 
 uint16_t curvaMQ138[NUM_MUESTRAS];
 uint16_t curvaMQ135[NUM_MUESTRAS];
-uint16_t curvaBME[NUM_MUESTRAS];
+uint16_t curvaBME[NUM_MUESTRAS];  // kOhm x ESCALA_BME
 
 unsigned long tiempoInicioCaptura;
 unsigned long ultimoMuestreo;
@@ -220,6 +249,12 @@ Motivo motivo = SIN_MOTIVO;
 
 bool avisoFirma = false;
 bool avisoDispersion = false;
+bool avisoSinReaccion = false;  // ningun sensor paso su minimo
+
+// Que sensor detecto la muestra (para el diagnostico)
+bool muestraPor135 = false;
+bool muestraPor138 = false;
+bool muestraPorBME = false;
 
 //=========================================================
 // MAQUINA DE ESTADOS CENTRAL
@@ -249,6 +284,10 @@ FaseLimpieza faseLimpieza = FaseLimpieza::CONFIRMANDO;
 bool confirmandoActivo = false;
 unsigned long tiempoInicioConfirmacion = 0;
 
+// Aviso antes de la referencia: ultimo segundo que ya se aviso
+// (5, 4, 3, 2, 1). 0 = todavia no se aviso.
+byte ultimoSegundoAvisado = 0;
+
 // Alarma de combustible incorrecto
 bool alarmaIncorrectoActiva = false;
 unsigned long tiempoInicioAlarmaIncorrecto = 0;
@@ -262,13 +301,29 @@ unsigned long tiempoUltimoCambioBoton = 0;
 const uint16_t DEBOUNCE_BOTON = 50;
 
 //=========================================================
-// INTERVALOS DE CADA VARIABLE (v7 - NO TOCAR, calibrados)
+// INTERVALOS DE CADA VARIABLE
+//
+// Copiados del DIFERENCIADOR_V7 del Nano (05/11/2026). Si se
+// cambian alla, copiarlos aca.
 //
 //  valor <  dieselMin ................ DUDA_POR_DEBAJO
 //  dieselMin <= valor <= dieselMax ... DIESEL
 //  dieselMax <  valor <  naftaMin .... DUDA_MEDIO
 //  naftaMin <= valor <= naftaMax ..... NAFTA
 //  valor >  naftaMax ................. DUDA_POR_ENCIMA
+//
+//  La relacion es (max138 + max135) / (ref138 + ref135):
+//  factor de subida, 1.00 = sin cambio.
+//
+//  iArea135 aproximado con las pruebas del 03/11/2026
+//  (diesel 2.56 / 2.76, nafta 3.18). Ajustar con mas datos.
+//
+//  iVarBME (05/11/2026): techo del diesel 40 -> 60. Con diesel
+//  dio 37.8 / 44.4 / 51.2 / 51.5 y votaba nafta, pero esos
+//  valores eran el tope de 655 kOhm con que se guardaba el BME
+//  (el BME no bajo de 655 y el VarBME salia de la referencia).
+//  Diesel medido de verdad: 17.5 / 25.2 / 31.5. Nafta: 88-92
+//  hoy y 65.4 el 03/11, por eso 60 y no 70.
 //=========================================================
 
 struct Intervalo {
@@ -278,12 +333,31 @@ struct Intervalo {
   float naftaMax;
 };
 
+//  iRelacion (05/11/2026, version 7.3): techo del diesel y piso
+//  de la nafta 1.10 (antes 1.23 / 1.24). Con muchas naftas
+//  seguidas la referencia de los MQ queda contaminada (mas alta)
+//  y la nafta daba 1.14-1.24, que votaba DIESEL. El diesel llego
+//  hasta 1.077.
+//
 //                      dslMin  dslMax  nafMin   nafMax
+Intervalo iRelacion = { 0.6, 1.10, 1.10, 10.0 };
+Intervalo iVarBME = { -10.00, 60.00, 61.00, 105.00 };
+Intervalo iArea135 = { 1.40, 2.90, 3.00, 7.60 };
+Intervalo iVar135 = {-5.00, 8.00, 8.50, 950.00 };
+Intervalo iPendiente = { 0.00, 0.42, 0.43, 1.90 };
+
+// iVarBME de la version 7.0 (pruebas del 05/11 a la manana):
+// Intervalo iVarBME = { -10.00, 40.00, 41.00, 105.00 };
+// iRelacion hasta la version 7.2:
+// Intervalo iRelacion = { 0.6, 1.23, 1.24, 10.0 };
+
+/* Valores anteriores (antes del 05/11/2026)
 Intervalo iRelacion = { 0.6, 1.23, 1.24, 1.8 };
 Intervalo iVarBME = { -10.00, 50.00, 55.00, 105.00 };
 Intervalo iArea135 = { 1.40, 3.3, 3.40, 7.60 };
 Intervalo iVar135 = {-5.00, 8.00, 8.50, 950.00 };
 Intervalo iPendiente = { 0.00, 0.42, 0.48, 1.90 };
+*/
 
 /*/                    dslMin  dslMax  nafMin   nafMax
 Intervalo iRelacion = { 0.75, 1.1, 1.2, 1.8 };
@@ -321,14 +395,19 @@ const byte PESO_RELACION = 3;
 const byte PESO_VARBME = 2;
 const byte PESO_AREA = 1;
 const byte PESO_VARIACION = 1;
-const byte PESO_PENDIENTE = 1;
+const byte PESO_PENDIENTE = 0;  // igual que DIFERENCIADOR_V7: no vota
 
 //=========================================================
 // CRITERIOS
 //=========================================================
 
-// Debajo de esta variacion se asume que no hay muestra
-const float VARIACION_MINIMA = 15.0;  // %
+// Deteccion de muestra (solo aviso): se considera que HAY
+// muestra si al menos un sensor reacciono por encima de su
+// minimo. Igual que DIFERENCIADOR_V7: el diesel casi no mueve
+// el MQ135, el BME si reacciona.
+const float VARIACION_MINIMA_135 = 3.0;  // %
+const float VARIACION_MINIMA_138 = 3.0;  // %
+const float VARIACION_MINIMA_BME = 5.0;  // %
 
 // Referencia minima del MQ138 para confiar en la firma
 const float REF138_MINIMA = 0.05;
@@ -375,9 +454,20 @@ float confianza = 0;       // 0 .. 1
 byte pasoUI = 0;
 unsigned long tiempoUI = 0;
 
-bool beepActivo = false;
 bool beepResultadoHecho = false;
+
+// Pitidos cortos: cuantos faltan sonar y si el actual esta sonando
+byte beepsPendientes = 0;
+bool beepSonando = false;
 unsigned long tiempoBeep = 0;
+const uint16_t DURACION_BEEP = 80;       // ms sonando
+const uint16_t PAUSA_ENTRE_BEEPS = 150;  // ms en silencio entre pitidos
+
+const byte BEEPS_CORRECTO = 1;  // combustible correcto
+const byte BEEPS_DUDA = 2;      // DUDA (antes 1 y se confundia con el correcto)
+
+// El resultado no es COMBUSTIBLE_CORRECTO: se prende tambien el LED rojo
+bool resultadoIncorrecto = false;
 
 //=========================================================
 // BUZZER DE ALARMA (alerta incorrecto / emergencia)
@@ -402,6 +492,7 @@ void iniciarTomaReferencia();
 void procesarTomaReferencia();
 void finalizarTomaReferencia();
 void procesarConfirmacionLimpieza();
+void avisarReferencia(uint32_t restante);
 
 void calcularFeatures();
 Zona zonaDe(float valor, const Intervalo &in);
@@ -414,7 +505,8 @@ void imprimirResultadoGases();
 
 void setLED(byte azul, byte amarillo, byte rojo);
 void actualizarBeep();
-void iniciarBeep();
+void iniciarBeeps(byte cantidad);
+void silenciarBuzzer();
 
 void patronLimpieza();
 void patronListo();
@@ -434,6 +526,7 @@ bool botonPresionado();
 void vigilarPresion();
 void cambiarEstado(Estado nuevo);
 void entrarEstado(Estado e);
+void imprimirEstado(Estado e);
 void prepararResultado(Zona resultado);
 void procesarResultado(Zona resultado);
 
@@ -460,11 +553,16 @@ void setup() {
   Serial.println(F("==================================="));
   Serial.println(F(" OLFATUS PETROLEUM "));
   Serial.println(F(" Maquina de estados central "));
+  Serial.println(F(" OLFATUS_PETROLEUM_V7 (programa completo)"));
+  Serial.println(F(" Version: " VERSION_PROGRAMA));
   Serial.println(F("==================================="));
 
   entrarEstado(estado); // inicializa LIMPIEZA_TRAMPA
 }
 
+// El estado se imprime una sola vez, al entrar (ver
+// imprimirEstado()). Antes se imprimia en cada vuelta del
+// loop y el monitor serie se llenaba de lineas repetidas.
 void loop() {
   gestionarBME();
   vigilarPresion(); // prioridad global sobre cualquier estado
@@ -472,21 +570,18 @@ void loop() {
   switch (estado) {
 
     case Estado::LIMPIEZA_TRAMPA:
-      Serial.println("LIMPIEZA_TRAMPA");
       patronLimpieza();
+      actualizarBeep();  // pitidos del aviso de referencia
 
       if (faseLimpieza == FaseLimpieza::CONFIRMANDO) {
-        Serial.println("PROCESAR_LIMPIEZA");
         procesarConfirmacionLimpieza();
       } else {
-        Serial.println("TOMAR_REFERENCIA");
         procesarTomaReferencia();
       }
 
       break;
 
     case Estado::EXTRACCION_LISTA_PARA_HACER:
-      Serial.println("EXTRACCION_LISTA_PARA_HACER");
       patronListo();
 
       if (botonPresionado()) {
@@ -496,19 +591,16 @@ void loop() {
       break;
 
     case Estado::EXTRAYENDO:
-      Serial.println("EXTRAYENDO");
       patronExtraccion();
       procesarExtraccion();
 
       break;
 
     case Estado::ANALIZANDO:
-     Serial.println("ANALIZANDO");
       // La clasificación se resuelve de forma instantánea en entrarEstado()
       break;
 
     case Estado::DUDA:
-      Serial.println("DUDA");
       patronDuda();
 
       if (botonPresionado()) {
@@ -518,17 +610,14 @@ void loop() {
       break;
 
     case Estado::DIESEL:
-      Serial.println("DIESEL");
       procesarResultado(DIESEL);
       break;
 
     case Estado::NAFTA:
-      Serial.println("NAFTA");
       procesarResultado(NAFTA);
       break;
 
     case Estado::EMERGENCIA:
-      Serial.println("EMERGENCIA");
       patronSobrepresion();
 
       if (millis() - tiempoInicioEmergencia >= TIEMPO_EMERGENCIA) {
@@ -548,7 +637,29 @@ void cambiarEstado(Estado nuevo) {
   entrarEstado(estado);
 }
 
+// El estado se imprime una sola vez, al entrar
+void imprimirEstado(Estado e) {
+  Serial.print(F(">> Estado: "));
+
+  switch (e) {
+    case Estado::LIMPIEZA_TRAMPA:             Serial.println(F("LIMPIEZA_TRAMPA")); break;
+    case Estado::EXTRACCION_LISTA_PARA_HACER: Serial.println(F("EXTRACCION_LISTA_PARA_HACER (apretar el boton)")); break;
+    case Estado::EXTRAYENDO:                  Serial.println(F("EXTRAYENDO")); break;
+    case Estado::ANALIZANDO:                  Serial.println(F("ANALIZANDO")); break;
+    case Estado::DUDA:                        Serial.println(F("DUDA")); break;
+    case Estado::DIESEL:                      Serial.println(F("DIESEL")); break;
+    case Estado::NAFTA:                       Serial.println(F("NAFTA")); break;
+    case Estado::EMERGENCIA:                  Serial.println(F("EMERGENCIA")); break;
+  }
+}
+
 void entrarEstado(Estado e) {
+  imprimirEstado(e);
+
+  // Cada estado arranca con el buzzer callado (si se salia de
+  // EMERGENCIA o de un pitido a mitad, podia quedar sonando)
+  silenciarBuzzer();
+
   switch (e) {
 
     case Estado::LIMPIEZA_TRAMPA:
@@ -588,7 +699,6 @@ void entrarEstado(Estado e) {
     case Estado::DUDA:
       setElectrovalvula(false);
 
-      beepActivo = false;
       beepResultadoHecho = false;
 
       break;
@@ -611,12 +721,11 @@ void entrarEstado(Estado e) {
 }
 
 void prepararResultado(Zona resultado) {
-  beepActivo = false;
   beepResultadoHecho = false;
 
-  bool esCorrecto = (resultado == COMBUSTIBLE_CORRECTO);
+  resultadoIncorrecto = (resultado != COMBUSTIBLE_CORRECTO);
 
-  if (esCorrecto) {
+  if (!resultadoIncorrecto) {
     alarmaIncorrectoActiva = false;
   } else {
     alarmaIncorrectoActiva = true;
@@ -626,9 +735,12 @@ void prepararResultado(Zona resultado) {
 }
 
 void procesarResultado(Zona resultado) {
-  // Mantener el LED del resultado siempre visible
-  if (resultado == DIESEL) setLED(0, 255, 0);   // amarillo
-  else                     setLED(255, 0, 0);   // azul
+  // Mantener el LED del resultado siempre visible: amarillo =
+  // diesel, azul = nafta. Si no es el COMBUSTIBLE_CORRECTO se
+  // prende tambien el rojo (patron de combustible incorrecto).
+  setLED(resultado == NAFTA ? 255 : 0,
+         resultado == DIESEL ? 255 : 0,
+         resultadoIncorrecto ? 255 : 0);
 
   if (alarmaIncorrectoActiva) {
     actualizarBuzzerAlarma();
@@ -642,7 +754,7 @@ void procesarResultado(Zona resultado) {
   }
 
   if (!beepResultadoHecho) {
-    iniciarBeep();
+    iniciarBeeps(BEEPS_CORRECTO);
     beepResultadoHecho = true;
   }
 
@@ -658,11 +770,11 @@ void procesarResultado(Zona resultado) {
 //=========================================================
 
 void vigilarPresion() {
-  if (!bmeDisponible) return;
+  // Hasta la primera lectura la presion vale 0: no hay que
+  // tomarla como una caida de presion.
+  if (!bmeDisponible || !hayLecturaBME) return;
 
-  float presionHPa = bme.pressure / 100.0;
-
-  if (presionHPa < UMBRAL_PRESION && estado != Estado::EMERGENCIA) {
+  if (presion < UMBRAL_PRESION && estado != Estado::EMERGENCIA) {
     cambiarEstado(Estado::EMERGENCIA);
   }
 }
@@ -672,23 +784,49 @@ void vigilarPresion() {
 //=========================================================
 
 void procesarConfirmacionLimpieza() {
-  if (!bmeDisponible) {
+  if (!bmeDisponible || !hayLecturaBME) {
     confirmandoActivo = false;
     return;
   }
 
-  float resistenciaKOhm = bme.gas_resistance / 1000.0;
-
-  if (resistenciaKOhm > UMBRAL_LIMPIEZA_BME) {
+  // resistenciaGas ya esta en kOhm (la actualiza gestionarBME())
+  if (resistenciaGas > UMBRAL_LIMPIEZA_BME) {
     if (!confirmandoActivo) {
       confirmandoActivo = true;
       tiempoInicioConfirmacion = millis();
-    } else if (millis() - tiempoInicioConfirmacion >= TIEMPO_CONFIRMACION_LIMPIEZA) {
-      iniciarTomaReferencia();
+      ultimoSegundoAvisado = 0;
+    } else {
+      uint32_t transcurrido = millis() - tiempoInicioConfirmacion;
+
+      if (transcurrido >= TIEMPO_CONFIRMACION_LIMPIEZA) {
+        iniciarTomaReferencia();
+      } else {
+        avisarReferencia(TIEMPO_CONFIRMACION_LIMPIEZA - transcurrido);
+      }
     }
   } else {
-    confirmandoActivo = false;
+    confirmandoActivo = false;  // si vuelve a bajar, la cuenta arranca de cero
   }
+}
+
+// Aviso de que se va a tomar la referencia: en los ultimos
+// TIEMPO_AVISO_REFERENCIA (5 s) suena un pitido por segundo
+// y se avisa una vez por el monitor serie.
+void avisarReferencia(uint32_t restante) {
+  if (restante > TIEMPO_AVISO_REFERENCIA) return;
+
+  byte segundos = (restante + 999) / 1000;  // 5, 4, 3, 2, 1
+
+  if (segundos == ultimoSegundoAvisado) return;
+
+  if (ultimoSegundoAvisado == 0) {
+    Serial.print(F("Atencion: la referencia se toma en "));
+    Serial.print(segundos);
+    Serial.println(F(" s"));
+  }
+
+  ultimoSegundoAvisado = segundos;
+  iniciarBeeps(1);
 }
 
 //=========================================================
@@ -701,6 +839,8 @@ void procesarConfirmacionLimpieza() {
 //=========================================================
 
 void iniciarTomaReferencia() {
+  Serial.println(F("Limpieza confirmada. Tomando referencia..."));
+
   faseLimpieza = FaseLimpieza::TOMANDO_REFERENCIA;
 
   ultimoMuestreoReferencia = 0;
@@ -734,6 +874,14 @@ void finalizarTomaReferencia() {
   referencia.mq138 = sumaRef138 / N_MUESTRAS_REFERENCIA;
   referencia.mq135 = sumaRef135 / N_MUESTRAS_REFERENCIA;
   referencia.bme = sumaRefBME / N_MUESTRAS_REFERENCIA;
+
+  Serial.print(F("Referencia: MQ135 = "));
+  Serial.print(referencia.mq135, 3);
+  Serial.print(F(" V   MQ138 = "));
+  Serial.print(referencia.mq138, 3);
+  Serial.print(F(" V   BME = "));
+  Serial.print(referencia.bme, 1);
+  Serial.println(F(" kOhm"));
 
   cambiarEstado(Estado::EXTRACCION_LISTA_PARA_HACER);
 }
@@ -769,14 +917,17 @@ void procesarExtraccion() {
   curvaMQ138[contadorMuestras] = (uint16_t)(mq138 * 1000);
   curvaMQ135[contadorMuestras] = (uint16_t)(mq135 * 1000);
 
-  // El uint16_t se desborda arriba de 655.35 kohm. Se recorta
-  // para no guardar basura (igual que el adquisidor).
+  // El BME se guarda en kOhm x 10 (hasta 6553.5 kOhm). Antes
+  // se guardaba x 100 con tope en 655 kOhm, pero la referencia
+  // en aire limpio da 900-1350 kOhm: con diesel (que casi no
+  // baja el BME) el minimo quedaba clavado en 655 y el VarBME
+  // salia de la referencia, no de la muestra.
   float gas = resistenciaGas;
 
   if (isnan(gas) || gas < 0) gas = 0;
-  if (gas > 655.0) gas = 655.0;
+  if (gas > BME_MAXIMO) gas = BME_MAXIMO;
 
-  curvaBME[contadorMuestras] = (uint16_t)(gas * 100);
+  curvaBME[contadorMuestras] = (uint16_t)(gas * ESCALA_BME);
 
   contadorMuestras++;
 
@@ -803,6 +954,9 @@ void configurarBME() {
   bme.setGasHeater(320, 150);
 }
 
+// Igual que la 7.0: performReading() frena el loop ~370 ms
+// (calentador a 320 C / 150 ms) en cada lectura. Por eso la
+// captura de 25 muestras dura ~9,25 s y no 5 s.
 void gestionarBME() {
   if (bmeDisponible) {
     if (bme.performReading()) {
@@ -810,6 +964,7 @@ void gestionarBME() {
       humedad = bme.humidity;
       presion = bme.pressure / 100.0;
       resistenciaGas = bme.gas_resistance / 1000.0;
+      hayLecturaBME = true;
     } else {
       bmeDisponible = false;
     }
@@ -834,7 +989,7 @@ void gestionarBME() {
 void calcularFeatures() {
   datos.max138 = curvaMQ138[0] / 1000.0;
   datos.max135 = curvaMQ135[0] / 1000.0;
-  datos.minBME = curvaBME[0] / 100.0;
+  datos.minBME = curvaBME[0] / ESCALA_BME;
 
   float suma138 = 0;
   float suma135 = 0;
@@ -843,7 +998,7 @@ void calcularFeatures() {
   for (byte i = 0; i < NUM_MUESTRAS; i++) {
     float mq138 = curvaMQ138[i] / 1000.0;
     float mq135 = curvaMQ135[i] / 1000.0;
-    float gas = curvaBME[i] / 100.0;
+    float gas = curvaBME[i] / ESCALA_BME;
 
     if (mq138 > datos.max138) datos.max138 = mq138;
     if (mq135 > datos.max135) datos.max135 = mq135;
@@ -884,7 +1039,18 @@ void calcularFeatures() {
   // RELACION Y FIRMA
   //--------------------------
 
-  datos.relacion = datos.max138 / datos.max135;
+  // Igual que DIFERENCIADOR_V7: antes era max138 / max135,
+  // pero los dos sensores suben en la misma proporcion y el
+  // cociente quedaba siempre igual al de la referencia
+  // (~1.38). Ahora mide cuanto subieron los dos juntos
+  // respecto a su referencia (~1.00 = no reaccionaron).
+  float sumaReferencia = referencia.mq138 + referencia.mq135;
+
+  if (sumaReferencia > 0.01) {
+    datos.relacion = (datos.max138 + datos.max135) / sumaReferencia;
+  } else {
+    datos.relacion = 0;  // referencia invalida
+  }
 
   if (datos.variacion138 > 0 && datos.variacion135 > 1.0) {
     datos.firma = datos.variacion138 / datos.variacion135;
@@ -939,6 +1105,11 @@ Zona decidirFinal() {
   motivo = SIN_MOTIVO;
   avisoFirma = false;
   avisoDispersion = false;
+  avisoSinReaccion = false;
+
+  muestraPor135 = false;
+  muestraPor138 = false;
+  muestraPorBME = false;
 
   pesoTotal = 0;
   posicionGlobal = 0;
@@ -1013,12 +1184,24 @@ Zona decidirFinal() {
   posicionGlobal = sumaPosicion / pesoTotal;
 
   //-----------------------
-  // 3) Hay muestra?
+  // 3) Hay muestra? (solo aviso, igual que DIFERENCIADOR_V7)
+  //
+  //    Alcanza con que reaccione UN sensor. variacion138
+  //    vale -1 si no es confiable y variacionBME -999 si
+  //    el BME no esta, asi que en esos casos no cuentan.
+  //
+  //    Ya NO corta el resultado: el diesel a veces no mueve
+  //    ningun sensor y quedaba en DUDA DEBAJO aunque todas
+  //    las variables votaran DIESEL. Ahora gana la votacion
+  //    y solo se avisa que ningun sensor reacciono.
   //-----------------------
 
-  if (datos.variacion135 < VARIACION_MINIMA) {
-    motivo = SIN_MUESTRA;
-    return DUDA_POR_DEBAJO;
+  muestraPor135 = datos.variacion135 >= VARIACION_MINIMA_135;
+  muestraPor138 = datos.variacion138 >= VARIACION_MINIMA_138;
+  muestraPorBME = datos.variacionBME >= VARIACION_MINIMA_BME;
+
+  if (!muestraPor135 && !muestraPor138 && !muestraPorBME) {
+    avisoSinReaccion = true;
   }
 
   //-----------------------
@@ -1119,10 +1302,22 @@ void imprimirDiagnostico() {
   Serial.print(F(" / "));
   Serial.println(datos.max138, 3);
 
+  Serial.print(F("Max/Ref 138 = "));
+  Serial.print(referencia.mq138 > REF138_MINIMA ? datos.max138 / referencia.mq138 : 0, 3);
+  Serial.print(F("   Max/Ref 135 = "));
+  Serial.println(referencia.mq135 > 0.01 ? datos.max135 / referencia.mq135 : 0, 3);
+
   Serial.print(F("Var138 = "));
   Serial.print(datos.variacion138, 1);
   Serial.print(F("   Firma = "));
   Serial.println(datos.firma, 2);
+
+  Serial.print(F("Muestra detectada por:"));
+  if (muestraPor135) Serial.print(F(" MQ135"));
+  if (muestraPor138) Serial.print(F(" MQ138"));
+  if (muestraPorBME) Serial.print(F(" BME"));
+  if (!muestraPor135 && !muestraPor138 && !muestraPorBME) Serial.print(F(" ninguno"));
+  Serial.println();
 
   Serial.println();
 
@@ -1205,6 +1400,12 @@ void imprimirResultadoGases() {
     Serial.println(F("dispersas, evidencia debil"));
   }
 
+  if (avisoSinReaccion) {
+    Serial.println();
+    Serial.println(F("AVISO: ningun sensor reacciono,"));
+    Serial.println(F("puede que no haya muestra"));
+  }
+
   Serial.println(F("============================"));
 
   if (MODO_DIAGNOSTICO) imprimirDiagnostico();
@@ -1277,7 +1478,7 @@ void patronNafta() {
   setLED(255, 0, 0);
 
   if (!beepResultadoHecho) {
-    iniciarBeep();
+    iniciarBeeps(BEEPS_CORRECTO);
     beepResultadoHecho = true;
   }
 
@@ -1288,7 +1489,7 @@ void patronDiesel() {
   setLED(0, 255, 0);
 
   if (!beepResultadoHecho) {
-    iniciarBeep();
+    iniciarBeeps(BEEPS_CORRECTO);
     beepResultadoHecho = true;
   }
 
@@ -1299,7 +1500,7 @@ void patronDuda() {
   setLED(0, 0, 255);
 
   if (!beepResultadoHecho) {
-    iniciarBeep();
+    iniciarBeeps(BEEPS_DUDA);  // 2 pitidos: distinto del combustible correcto
     beepResultadoHecho = true;
   }
 
@@ -1325,19 +1526,40 @@ void patronSobrepresion() {
 // INTERFAZ - BUZZER (doc2)
 //=========================================================
 
-void actualizarBeep() {
-  if (!beepActivo) return;
+// Pitidos cortos: DURACION_BEEP sonando y PAUSA_ENTRE_BEEPS
+// callado entre uno y otro. 1 = combustible correcto,
+// 2 = DUDA, 1 por segundo = aviso de referencia.
+void iniciarBeeps(byte cantidad) {
+  if (cantidad == 0) return;
 
-  if (millis() - tiempoBeep >= 80) {
-    digitalWrite(BUZZER, HIGH); // apagar (LOW = sonando, HIGH = silencio)
-    beepActivo = false;
+  beepsPendientes = cantidad;
+  beepSonando = true;
+  tiempoBeep = millis();
+  digitalWrite(BUZZER, LOW); // encender (LOW = sonando, HIGH = silencio)
+}
+
+void actualizarBeep() {
+  if (beepsPendientes == 0) return;
+
+  if (beepSonando) {
+    if (millis() - tiempoBeep >= DURACION_BEEP) {
+      digitalWrite(BUZZER, HIGH); // apagar
+      beepSonando = false;
+      beepsPendientes--;
+      tiempoBeep = millis();
+    }
+  } else if (millis() - tiempoBeep >= PAUSA_ENTRE_BEEPS) {
+    digitalWrite(BUZZER, LOW);
+    beepSonando = true;
+    tiempoBeep = millis();
   }
 }
 
-void iniciarBeep() {
-  digitalWrite(BUZZER, LOW); // encender (LOW = sonando, HIGH = silencio)
-  beepActivo = true;
-  tiempoBeep = millis();
+void silenciarBuzzer() {
+  beepsPendientes = 0;
+  beepSonando = false;
+  buzzerAlarmaEncendido = false;
+  digitalWrite(BUZZER, HIGH);
 }
 
 //=========================================================

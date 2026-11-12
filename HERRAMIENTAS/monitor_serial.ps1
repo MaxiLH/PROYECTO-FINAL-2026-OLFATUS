@@ -1,4 +1,4 @@
-<#
+﻿<#
   MONITOR SERIAL - OLFATUS PETROLEUM
 
   Reemplaza al Monitor Serie del Arduino IDE para que Claude
@@ -56,7 +56,8 @@ try {
 $hayTeclado = $true
 try { [void][Console]::KeyAvailable } catch { $hayTeclado = $false }
 
-Escribir-Log "===== Monitor abierto en $Puerto a $Baudios baudios ====="
+# La fecha la usa log_a_excel.ps1 (las lineas solo tienen la hora)
+Escribir-Log "===== Monitor abierto ($(Get-Date -Format 'yyyy-MM-dd')) en $Puerto a $Baudios baudios ====="
 Write-Host "Monitor abierto en $Puerto a $Baudios baudios. ESC para salir." -ForegroundColor Green
 Write-Host "Log: $archivoLog" -ForegroundColor DarkGray
 
