@@ -45,6 +45,23 @@
         )
       }
     }
+    CompletoESP32 = @{
+      '7.3.1' = @{
+        Titulo = 'CORTE - Versión 7.3.1 ESP32 (12/11/2026). Las pruebas de abajo son con estos cambios:'
+        Cambios = @(
+          'Botón con antirrebote: se lee cada 5 ms (Ticker), aparte del loop, y un cambio cuenta si dura 40 ms. Las pulsaciones de antes de entrar a un estado no cuentan.'
+          'El botón de la placa del ESP da HIGH suelto y LOW apretado. Desde las 14:29 cuenta al apretarlo (en la prueba de las 14:26 todavía contaba al soltarlo).'
+          'Buzzer: se probó HIGH = suena y sonaba todo el tiempo; se volvió a LOW = suena, como en el Nano.'
+          '(No es del programa) Entre las 14:34 y las 15:34 se modificó la placa: las referencias de los MQ bajaron de ~2,6-3,0 V a ~0,42-0,53 V. Las 10 pruebas de la tarde (desde las 16:20) son con la placa modificada.'
+        )
+      }
+      '7.3.2' = @{
+        Titulo = 'CORTE - Versión 7.3.2 ESP32 (12/11/2026): cambio hecho después de las 10 pruebas (todavía sin pruebas):'
+        Cambios = @(
+          'Area135: 1,40 / 2,90 / 3,00 / 7,60 (los del Nano) -> 0,65 / 1,33 / 1,34 / 3,50. El resto de los intervalos no cambió.'
+        )
+      }
+    }
   }
 
   Filas = @{
@@ -73,11 +90,17 @@
     'Completo|05/11/2026|15:19:22' = 'VarBME 56,1 %: el diesel más alto sin el tope de 655 kOhm, a 4 puntos del techo (60). Igual dio DIESEL.'
     'Completo|05/11/2026|15:29:46' = 'Nafta después de otra nafta: referencia del MQ138 en 1,823 V y el MQ138 bajó 4 %: Relación 1,050 votó DIESEL y dio DUDA MEDIO.'
     'Completo|05/11/2026|15:43:09' = 'El MQ135 subió 82 %, la más fuerte de la tarde. La referencia siguiente quedó con el MQ135 en 1,344 V (las demás de la tarde, 0,92-1,30 V) y antes de la próxima prueba la placa se reinició (15:44:59).'
-    'Completo|05/11/2026|15:46:20' = 'Primera después del reinicio de las 15:44:59: la referencia del BME dio 384,3 kOhm (las demás de la tarde, 716-1150 kOhm) y el VarBME (52,7 %) votó DIESEL; dio DUDA MEDIO con 71 %. Puede ser el BME recién reiniciado (como en la 1ª prueba de la mañana) o vapores que quedaron de la 63.'
+    'CompletoESP32|12/11/2026|14:13:46' = 'SIN MUESTRA: arrancó sola 0,35 s después de la referencia (ningún sensor reaccionó). El botón de la placa del ESP da HIGH suelto y el programa lo tomaba como pulsación. Corregido en la 7.3.1.'
+    'CompletoESP32|12/11/2026|14:26:38' = 'Primera con la 7.3.1: arrancó al soltar el botón (todavía contaba con HIGH). Referencias de los MQ en ~2,6 V.'
+    'CompletoESP32|12/11/2026|14:32:54' = 'Max MQ135 = Max MQ138 = 3,100 V: saturado, es el tope del ADC del ESP32. Las referencias estaban en ~3,0 V.'
+    'CompletoESP32|12/11/2026|16:20:34' = 'Primera de las 10 pruebas de la tarde, con la placa modificada: referencias de los MQ en ~0,45 V (a las 14:00, ~2,6-3,0 V).'
+    'CompletoESP32|12/11/2026|16:23:21' = 'Area135 1,251: la nafta más baja, por debajo de 3 diesel (1,267 / 1,299 / 1,324). Fue la de referencia del MQ135 más baja (0,419 V). Con los intervalos de la 7.3.2 vota DIESEL; el resultado igual da NAFTA.'
+    'Completo|05/11/2026|15:46:20' ='Primera después del reinicio de las 15:44:59: la referencia del BME dio 384,3 kOhm (las demás de la tarde, 716-1150 kOhm) y el VarBME (52,7 %) votó DIESEL; dio DUDA MEDIO con 71 %. Puede ser el BME recién reiniciado (como en la 1ª prueba de la mañana) o vapores que quedaron de la 63.'
   }
 
   NotasHoja = @{
-    Completo = 'Combustible real del 05/11: lo dedujo Claude de los datos y de lo que contó el grupo, también el de la versión 7.3 (ver hoja Observaciones). Las 2 pruebas de la versión 7.1 quedaron en blanco. Confirmarlo.'
+    CompletoESP32 = 'EMPEZAMOS CON EL ESP32 (12/11/2026). Combustible real de las 10 pruebas de la tarde: lo dijo el grupo (diesel y nafta alternados, la placa acertó todas). Las 4 primeras quedaron en blanco (la de las 14:13 fue sin muestra).'
+    Completo = 'DESDE EL 12/11/2026 SEGUIMOS CON EL ESP32: ver hoja "Programa completo ESP32". Combustible real del 05/11: lo dedujo Claude de los datos y de lo que contó el grupo, también el de la versión 7.3 (ver hoja Observaciones). Las 2 pruebas de la versión 7.1 quedaron en blanco. Confirmarlo.'
   }
 
   Generales = @(
@@ -171,6 +194,34 @@
       Pruebas = '30 y 64'
       Tema = 'Reinicios de la placa'
       Texto = 'La placa se reinició 2 veces mientras esperaba el botón: a las 14:30:31 y a las 15:44:59. El log no dice si fue el botón de reset o un corte de alimentación. Las dos veces la referencia anterior había quedado alta (14:29: MQ138 1,938 V y BME 767,6 kOhm; 15:44: MQ135 1,344 V), así que puede que la hayan reiniciado a mano para volver a tomarla. Después del de las 14:30 la referencia salió limpia y la 30 dio NAFTA. Después del de las 15:44 el BME dio 384,3 kOhm de referencia y la 64 dio DUDA MEDIO. Si no fue a mano, revisar la alimentación y el cable USB.'
+    }
+    @{
+      Programa = 'CompletoESP32'
+      Fecha = '12/11/2026'
+      Pruebas = 'todas'
+      Tema = 'Empezamos con el ESP32'
+      Texto = 'El 12/11/2026 se empezó a probar el programa completo en la placa con ESP32: OLFATUS_PETROLEUM_V7 de la carpeta PROYECTO EN EL ESP32 (versión 7.3 ESP32 y después 7.3.1). Es el programa del Nano 7.3 con los pines del ESP32, los MQ leídos con analogReadMilliVolts (ADC de 12 bits, hasta ~3,1 V), el switch de combustible guardado en la EEPROM y una sola electroválvula. Las pruebas del ESP32 se guardan en HERRAMIENTAS\logs\serial_esp32.log y van en la hoja "Programa completo ESP32", con sus propios intervalos (hoja Parámetros, segunda tabla). La carpeta del Nano no se tocó.'
+    }
+    @{
+      Programa = 'CompletoESP32'
+      Fecha = '12/11/2026'
+      Pruebas = '1 a 4 y 5 a 14'
+      Tema = 'Referencias de los MQ en el ESP32'
+      Texto = 'Con la placa como estaba a las 14:00, las referencias de los MQ daban 2,6-3,0 V, muy cerca del tope del ADC del ESP32 (~3,1 V): en la prueba de las 14:32 el máximo de los dos MQ quedó clavado en 3,100 V (saturado). Entre las 14:34 y las 15:34 se modificó la placa y las referencias bajaron a 0,42-0,53 V (en el Nano daban ~1,0 V). Si se agregó un divisor, falta cargar su factor en FACTOR_DIVISOR_MQ para que los voltajes queden en la misma escala que en el Nano.'
+    }
+    @{
+      Programa = 'CompletoESP32'
+      Fecha = '12/11/2026'
+      Pruebas = '1 y 2'
+      Tema = 'Botón y buzzer del ESP32'
+      Texto = 'El botón de la placa del ESP da HIGH suelto y LOW apretado (al revés que el programa del Nano): con el programa sin cambios, la primera extracción después de cada reinicio arrancaba sola (14:13, sin muestra). En la 7.3.1 el botón se lee cada 5 ms con antirrebote de 40 ms y cuenta al apretarlo. El buzzer no se escuchaba con el programa del Nano; se probó HIGH = suena y sonaba todo el tiempo, así que se volvió a LOW = suena, como en el Nano.'
+    }
+    @{
+      Programa = 'CompletoESP32'
+      Fecha = '12/11/2026'
+      Pruebas = '5 a 14'
+      Tema = 'Area135 en el ESP32'
+      Texto = 'Las 10 pruebas de la tarde acertaron todas, pero el Area135 votó DUDA DEBAJO en las 10: con la placa modificada dio diesel 1,129-1,324 y nafta 1,251-1,400, todo debajo del piso del Nano (1,40). Además diesel y nafta se superponen: el Area135 es la suma de los 25 voltajes del MQ135 x 0,1 (2,5 x el promedio), así que sigue a la referencia, que varió entre 0,42 y 0,53 V. La nafta de las 16:23 (1,251) tuvo la referencia más baja (0,419 V). Patrón: dividiendo el Area135 por 2,5 x la referencia del MQ135 (promedio de la captura / referencia), el diesel da 0,98-1,01 y la nafta 1,13-1,22, sin superponerse. En la 7.3.2 solo se cambiaron los intervalos del Area135 a 0,65 / 1,33 / 1,34 / 3,50: de las 10, 9 votan bien y la nafta de las 16:23 vota DIESEL; el resultado de las 10 no cambia.'
     }
     @{
       Programa = 'Diferenciador'

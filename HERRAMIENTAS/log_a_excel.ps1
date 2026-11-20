@@ -7,6 +7,8 @@
 
     Diferenciador      -> DIFERENCIADOR_V7 (standalone)
     Programa completo  -> OLFATUS_PETROLEUM_V7
+    Programa completo ESP32 -> OLFATUS_PETROLEUM_V7 en la placa con
+                          ESP32 (sale de logs\serial_esp32.log, -LogEsp)
     Demo               -> OLFATUS_PETROLEUM_V7_DEMO
 
   El programa de cada prueba se reconoce por el cartel que imprime
@@ -39,6 +41,7 @@
 
 param(
   [string]$Log = (Join-Path $PSScriptRoot "logs\serial.log"),
+  [string]$LogEsp = (Join-Path $PSScriptRoot "logs\serial_esp32.log"),
   [string]$Salida = "",
   [string]$Reales = "",
   [string]$Notas = ""
@@ -115,6 +118,11 @@ $programas = [ordered]@{
     Titulo = "OLFATUS_PETROLEUM_V7 (Arduino Nano, programa completo: maquina de estados, boton y electrovalvula)"
     Nota = "Limpieza automatica: el BME tiene que quedar arriba de 220 kOhm durante 60 s (45 s en la version 7.1, 65 s desde la 7.3; ver columna Limpieza). La extraccion se arranca con el boton."
   }
+  CompletoESP32 = @{
+    Hoja = "Programa completo ESP32"
+    Titulo = "OLFATUS_PETROLEUM_V7 en la placa con ESP32 (ESP32 DOIT DevKit V1, carpeta PROYECTO EN EL ESP32)"
+    Nota = "Mismo programa que el Nano 7.3, con los pines del ESP32. Limpieza de 1 min 5 s. Las columnas 'param. actuales' usan los intervalos del ESP32 (hoja Parametros, segunda tabla)."
+  }
   Demo = @{
     Hoja = "Demo"
     Titulo = "OLFATUS_PETROLEUM_V7_DEMO (muestras de ejemplo)"
@@ -127,6 +135,12 @@ $programas = [ordered]@{
 #---------------------------------------------------------
 
 $pruebas = New-Object System.Collections.ArrayList
+
+# El log del Nano y, si existe, el del ESP32
+$logs = @(@{ Ruta = $Log; Esp = $false })
+if ($LogEsp -and (Test-Path $LogEsp)) { $logs += @{ Ruta = $LogEsp; Esp = $true } }
+
+foreach ($archivo in $logs) {
 $p = $null
 $esperaResultado = $false
 $enResultado = $false
@@ -134,13 +148,14 @@ $enResultado = $false
 # Los logs viejos no tienen cartel ni fecha: eran del diferenciador
 # y la fecha es la del dia que se creo el log.
 $programa = "Diferenciador"
+if ($archivo.Esp) { $programa = "CompletoESP32" }
 $version = ""
-$fecha = (Get-Item $Log).CreationTime.Date
+$fecha = (Get-Item $archivo.Ruta).CreationTime.Date
 $inicioLimpieza = $null
 $limpiezaSeg = $null
 $inicioEspera = $null
 
-foreach ($linea in (Get-Content $Log -Encoding UTF8)) {
+foreach ($linea in (Get-Content $archivo.Ruta -Encoding UTF8)) {
   if ($linea -notmatch '^\[(\d\d):(\d\d):(\d\d)\.(\d+)\] ?(.*)$') { continue }
 
   $hora = "{0}:{1}:{2}" -f $Matches[1], $Matches[2], $Matches[3]
@@ -155,7 +170,12 @@ foreach ($linea in (Get-Content $Log -Encoding UTF8)) {
 
   # Cartel de arranque -> que programa (y que version) esta cargado
   if ($t -eq 'Clasificador Diesel / Nafta') { $programa = "Diferenciador"; $version = ""; continue }
-  if ($t -eq 'Maquina de estados central') { $programa = "Completo"; $version = "7.0"; continue }
+  if ($t -eq 'Maquina de estados central') {
+    $programa = "Completo"
+    if ($archivo.Esp) { $programa = "CompletoESP32" }
+    $version = "7.0"
+    continue
+  }
   if ($t -eq '*** MODO DEMO ***') { $programa = "Demo"; $version = ""; continue }
   if ($t -match '^Version: ([\d.]+)') { $version = $Matches[1]; continue }
 
@@ -226,6 +246,7 @@ foreach ($linea in (Get-Content $Log -Encoding UTF8)) {
     '^Posicion global .*= ([\d.-]+)' { $p.Posicion = Num $Matches[1] }
     '^Confianza = (\d+) %' { $p.Confianza = (Num $Matches[1]) / 100.0 }
   }
+}
 }
 
 # Solo las pruebas que llegaron al diagnostico
@@ -324,6 +345,31 @@ $wp.Columns.Item(7).ColumnWidth = 100
 # Fila de Parametros de cada variable
 $filaParam = @{ Relacion = 5; VarBME = 6; Area135 = 7; Var135 = 8; Pend135 = 9 }
 
+# Segunda tabla: intervalos del ESP32 (hoja Programa completo ESP32)
+Set-Celda $wp 13 1 "Intervalos del ESP32 (OLFATUS_PETROLEUM_V7 de la carpeta PROYECTO EN EL ESP32, version 7.3.2). Los usa la hoja 'Programa completo ESP32'. Mismo umbral de confianza."
+$wp.Cells.Item(13, 1).Font.Bold = $true
+$wp.Cells.Item(13, 1).Font.Size = 12
+for ($c = 0; $c -lt $encP.Count; $c++) { Set-Celda $wp 14 ($c + 1) $encP[$c] }
+$wp.Range("A14:G14").Font.Bold = $true
+$wp.Range("A14:G14").Interior.Color = $gris
+
+$parametrosEsp = @(
+  @("Relacion", 0.6, 1.10, 1.10, 10.0, 3, "Igual que el Nano 7.3."),
+  @("VarBME", -10.0, 60.0, 61.0, 105.0, 2, "Igual que el Nano 7.3."),
+  @("Area135", 0.65, 1.33, 1.34, 3.50, 1, "12/11/2026 (ESP32 7.3.2): con las 10 pruebas de la placa modificada (diesel 1,129-1,324, nafta 1,251-1,400). Con los del Nano (1,40 / 2,90 / 3,00 / 7,60) todo votaba DUDA DEBAJO. Ver hoja Observaciones."),
+  @("Var135", -5.0, 8.0, 8.5, 950.0, 1, "Igual que el Nano 7.3."),
+  @("Pend135", 0.0, 0.42, 0.43, 1.90, 0, "Igual que el Nano 7.3. Peso 0: no vota.")
+)
+
+for ($i = 0; $i -lt $parametrosEsp.Count; $i++) {
+  $fila = 15 + $i
+  for ($c = 0; $c -lt 7; $c++) { Set-Celda $wp $fila ($c + 1) $parametrosEsp[$i][$c] }
+  $wp.Range("B${fila}:F${fila}").Font.Color = $azulTexto
+}
+$wp.Range("B15:E19").NumberFormatLocal = (Fmt 2)
+
+$filaParamEsp = @{ Relacion = 15; VarBME = 16; Area135 = 17; Var135 = 18; Pend135 = 19 }
+
 #--------------------------
 # Columnas de las hojas de muestras: clave, titulo, formato
 #--------------------------
@@ -404,6 +450,10 @@ foreach ($claveProg in $programas.Keys) {
 
   $cortesProg = @{}
   if ($cortes.ContainsKey($claveProg)) { $cortesProg = $cortes[$claveProg] }
+
+  # Intervalos con que se recalcula esta hoja
+  $fp = $filaParam
+  if ($claveProg -eq "CompletoESP32") { $fp = $filaParamEsp }
 
   $ws = $wb.Worksheets.Add([Type]::Missing, $wb.Worksheets.Item($wb.Worksheets.Count))
   $ws.Name = $info.Hoja
@@ -546,7 +596,7 @@ foreach ($claveProg in $programas.Keys) {
       # Zonas recalculadas con la hoja Parametros
       foreach ($vr in $variables) {
         $x = (L ("V_" + $vr)) + $r
-        $k = $filaParam[$vr]
+        $k = $fp[$vr]
         $formula = "=IF($x=`"`",`"`",IF($x<$pr`$B`$$k,`"DUDA DEBAJO`",IF($x<=$pr`$C`$$k,`"DIESEL`",IF($x<$pr`$D`$$k,`"DUDA MEDIO`",IF($x<=$pr`$E`$$k,`"NAFTA`",`"DUDA ENCIMA`")))))"
         if ($vr -eq "VarBME") { $formula = "=IF($x=-999,`"no disponible`"," + $formula.Substring(1) + ")" }
         $ws.Cells.Item($r, $col["N_" + $vr]).Formula = $formula
@@ -557,7 +607,7 @@ foreach ($claveProg in $programas.Keys) {
       $terminosTotal = @()
       foreach ($vr in $variables) {
         $z = (L ("N_" + $vr)) + $r
-        $w = "$pr`$F`$" + $filaParam[$vr]
+        $w = "$pr`$F`$" + $fp[$vr]
         if ($vr -eq "VarBME") { $terminosTotal += "AND($z<>`"`",$z<>`"no disponible`")*$w" }
         else { $terminosTotal += "($z<>`"`")*$w" }
       }
@@ -566,7 +616,7 @@ foreach ($claveProg in $programas.Keys) {
       $peso = @{}
       foreach ($zona in "DIESEL", "NAFTA", "DUDA DEBAJO", "DUDA ENCIMA") {
         $terminos = @()
-        foreach ($vr in $variables) { $terminos += "($((L ("N_" + $vr)) + $r)=`"$zona`")*$pr`$F`$$($filaParam[$vr])" }
+        foreach ($vr in $variables) { $terminos += "($((L ("N_" + $vr)) + $r)=`"$zona`")*$pr`$F`$$($fp[$vr])" }
         $peso[$zona] = "(" + ($terminos -join "+") + ")"
       }
 

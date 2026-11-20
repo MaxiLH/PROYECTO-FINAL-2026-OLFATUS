@@ -2,10 +2,11 @@
 // Pines
 //==============================
 
-#define LED_AZUL 3
-#define LED_AMARILLO 4
-#define LED_ROJO 5
-#define BUZZER 13
+// Placa ESP32
+#define LED_AZUL 19
+#define LED_AMARILLO 33
+#define LED_ROJO 17
+#define BUZZER 23
 
 //==============================
 // Control interfaz

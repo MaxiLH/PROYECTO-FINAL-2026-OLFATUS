@@ -13,7 +13,9 @@
  *      25 muestras fijas, delay de 200 ms, mismas cuentas,
  *      misma cuantizacion a uint16_t.
  *
- *  - Pines del diferenciador SIN CAMBIOS (MQ138 = A3, MQ135 = A2)
+ *  - VERSION ESP32 (12/11/2026): MQ135 = IO35, MQ138 = IO32,
+ *    electrovalvula de entrada = IO27 (no hay de salida). Los MQ
+ *    se leen con analogReadMilliVolts().
  *
  *  - NUEVO: umbral de confianza del 80%. Si la zona con mas
  *    peso no junta al menos el 80% del peso total disponible,
@@ -41,12 +43,23 @@ Adafruit_BME680 bme(&Wire);
 // PINES
 //=========================================================
 
-const byte PIN_MQ138 = A3;
-const byte PIN_MQ135 = A2;
+// Placa ESP32-DevKit-V1. BME680: SDA = IO21, SCL = IO22
+// (pines por defecto del Wire del ESP32)
+const byte PIN_MQ135 = 35;  // A_135_1
+const byte PIN_MQ138 = 32;  // A_138_1
 
-// Definición de los pines para las válvulas
-const int pinValvulaEntrada = 8;
-const int pinValvulaSalida = 12;
+// Los MQ se alimentan con 5 V y el ADC del ESP32 llega a ~3,1 V.
+// Si la placa tiene un divisor entre la salida del MQ y el pin,
+// poner (R1 + R2) / R2. 1.0 = sin divisor.
+const float FACTOR_DIVISOR_MQ = 1.0;
+
+// La placa del ESP32 tiene una sola electrovalvula (entrada)
+const int pinValvulaEntrada = 27;
+
+// Lectura en voltios con la calibracion de fabrica del ADC
+float leerVoltajeMQ(byte pin) {
+  return analogReadMilliVolts(pin) / 1000.0 * FACTOR_DIVISOR_MQ;
+}
 
 //=========================================================
 // CONFIGURACION DE CAPTURA
@@ -184,6 +197,12 @@ Motivo motivo = SIN_MOTIVO;
 
 bool avisoFirma = false;
 bool avisoDispersion = false;
+bool avisoSinReaccion = false;  // ningun sensor paso su minimo
+
+// Que sensor detecto la muestra (para el diagnostico)
+bool muestraPor135 = false;
+bool muestraPor138 = false;
+bool muestraPorBME = false;
 
 //=========================================================
 // MAQUINA DE ESTADOS
@@ -230,12 +249,31 @@ struct Intervalo {
   float naftaMax;
 };
 
+//  OJO: la relacion ahora es (max138 + max135) / (ref138 + ref135),
+//  o sea un factor de subida (1.00 = sin cambio). El rango de
+//  "relacion" de la tabla de arriba es de la formula vieja.
+//  naftaMax se subio de 1.8 a 10.0 (igual que el tope de
+//  iVar135, ~950%) para que una nafta que sube mucho no caiga
+//  en DUDA ENCIMA.
+//
 //                      dslMin  dslMax  nafMin   nafMax
-Intervalo iRelacion = { 0.6, 1.23, 1.24, 1.8 };
-Intervalo iVarBME = { -10.00, 50.00, 55.00, 105.00 };
-Intervalo iArea135 = { 1.40, 3.3, 3.40, 7.60 };
+// iRelacion 1.10 / 1.10 desde el 05/11/2026, igual que el programa
+// completo 7.3 (antes 1.23 / 1.24): con naftas seguidas la referencia
+// se contamina y la nafta daba 1.14-1.24.
+Intervalo iRelacion = { 0.6, 1.10, 1.10, 10.0 };
+// iVarBME (05/11/2026): techo del diesel 40 -> 60, igual que
+// el programa completo. Con diesel daba 37.8-51.5 por el tope
+// de 655 kOhm del BME (ver capturarMuestras), no por la
+// muestra. Nafta: 88-92 en el programa completo, 65.4 aca.
+// Antes: { -10.00, 40.00, 41.00, 105.00 }
+Intervalo iVarBME = { -10.00, 60.00, 61.00, 105.00 };
+// iArea135 aproximado con las pruebas del 03/11/2026
+// (limpiezas de 1 minuto): diesel 2.56 / 2.76, nafta 3.18.
+// Antes era { 1.40, 3.3, 3.40, 7.60 } y la nafta caia en
+// DIESEL. Hay que ajustarlo con mas datos.
+Intervalo iArea135 = { 1.40, 2.90, 3.00, 7.60 };
 Intervalo iVar135 = {-5.00, 8.00, 8.50, 950.00 };
-Intervalo iPendiente = { 0.00, 0.42, 0.48, 1.90 };
+Intervalo iPendiente = { 0.00, 0.42, 0.43, 1.90 };
 
 /**
 Intervalo iRelacion = { 0.75, 1.1, 1.2, 1.8 };
@@ -274,8 +312,16 @@ const byte PESO_PENDIENTE = 0;
 // CRITERIOS
 //=========================================================
 
-// Debajo de esta variacion se asume que no hay muestra
-const float VARIACION_MINIMA = 15.0;  // %
+// Deteccion de muestra: se considera que HAY muestra si al
+// menos un sensor reacciono por encima de su minimo.
+//
+// Antes solo se miraba Var135 >= 15%, pero el diesel casi no
+// mueve el MQ135 (su intervalo es -5% a 8%), asi que todo
+// diesel caia en "No se detecto muestra" aunque todas las
+// variables votaran DIESEL. El BME si reacciona al diesel.
+const float VARIACION_MINIMA_135 = 3.0;  // %
+const float VARIACION_MINIMA_138 = 3.0;  // %
+const float VARIACION_MINIMA_BME = 5.0;  // %
 
 // Referencia minima del MQ138 para confiar en la firma
 const float REF138_MINIMA = 0.05;
@@ -366,14 +412,11 @@ void setup() {
   Serial.println(F("para comenzar."));
 
   pinMode(pinValvulaEntrada, OUTPUT);
-  pinMode(pinValvulaSalida, OUTPUT);
 
   digitalWrite(pinValvulaEntrada, LOW);
-  digitalWrite(pinValvulaSalida, LOW);
   delay(1000);
 
   digitalWrite(pinValvulaEntrada, HIGH);
-  digitalWrite(pinValvulaSalida, HIGH);
 }
 
 //=========================================================
@@ -518,8 +561,8 @@ void obtenerReferencia() {
   for (byte i = 0; i < N_MUESTRAS_REFERENCIA; i++) {
     gestionarBME();
 
-    suma138 += analogRead(PIN_MQ138) * (5.0 / 1023.0);
-    suma135 += analogRead(PIN_MQ135) * (5.0 / 1023.0);
+    suma138 += leerVoltajeMQ(PIN_MQ138);
+    suma135 += leerVoltajeMQ(PIN_MQ135);
 
     if (bmeDisponible && !isnan(resistenciaGas)) {
       sumaBME += resistenciaGas;
@@ -557,21 +600,23 @@ void capturarMuestras() {
 
     if (!bmeDisponible) bmeValidoEnCaptura = false;
 
-    float mq138 = analogRead(PIN_MQ138) * (5.0 / 1023.0);
-    float mq135 = analogRead(PIN_MQ135) * (5.0 / 1023.0);
+    float mq138 = leerVoltajeMQ(PIN_MQ138);
+    float mq135 = leerVoltajeMQ(PIN_MQ135);
 
     curvaMQ138[i] = (uint16_t)(mq138 * 1000);
     curvaMQ135[i] = (uint16_t)(mq135 * 1000);
 
-    // El uint16_t se desborda arriba de 655.35 kohm.
-    // Se recorta para no guardar basura. Conviene agregar
-    // estas dos lineas tambien en el adquisidor.
+    // El BME se guarda en kOhm x 10 (hasta 6553.5 kOhm).
+    // Antes era x 100 con tope en 655 kOhm, pero en aire
+    // limpio el BME da 900-1350 kOhm: con diesel el minimo
+    // quedaba clavado en 655 y el VarBME salia de la
+    // referencia, no de la muestra.
     float gas = resistenciaGas;
 
     if (isnan(gas) || gas < 0) gas = 0;
-    if (gas > 655.0) gas = 655.0;
+    if (gas > 6553.0) gas = 6553.0;
 
-    curvaBME[i] = (uint16_t)(gas * 100);
+    curvaBME[i] = (uint16_t)(gas * 10);
 
     delay(PERIODO_MUESTREO);
   }
@@ -592,7 +637,7 @@ void capturarMuestras() {
 void calcularFeatures() {
   datos.max138 = curvaMQ138[0] / 1000.0;
   datos.max135 = curvaMQ135[0] / 1000.0;
-  datos.minBME = curvaBME[0] / 100.0;
+  datos.minBME = curvaBME[0] / 10.0;
 
   float suma138 = 0;
   float suma135 = 0;
@@ -601,7 +646,7 @@ void calcularFeatures() {
   for (byte i = 0; i < NUM_MUESTRAS; i++) {
     float mq138 = curvaMQ138[i] / 1000.0;
     float mq135 = curvaMQ135[i] / 1000.0;
-    float gas = curvaBME[i] / 100.0;
+    float gas = curvaBME[i] / 10.0;
 
     if (mq138 > datos.max138) datos.max138 = mq138;
     if (mq135 > datos.max135) datos.max135 = mq135;
@@ -640,9 +685,26 @@ void calcularFeatures() {
 
   //--------------------------
   // RELACION Y FIRMA
+  //
+  // Antes era max138 / max135, pero los dos sensores suben
+  // en la misma proporcion: con nafta o con diesel el
+  // cociente quedaba siempre igual al de la referencia
+  // (~1.38). Ahora la relacion mide cuanto subieron los dos
+  // sensores juntos respecto a su referencia:
+  //
+  //   (max138 + max135) / (ref138 + ref135)
+  //
+  //   ~1.00 = no reaccionaron (diesel, casi sin aromaticos)
+  //   >1.00 = subieron (nafta)
   //--------------------------
 
-  datos.relacion = datos.max138 / datos.max135;
+  float sumaReferencia = referencia.mq138 + referencia.mq135;
+
+  if (sumaReferencia > 0.01) {
+    datos.relacion = (datos.max138 + datos.max135) / sumaReferencia;
+  } else {
+    datos.relacion = 0;  // referencia invalida
+  }
 
   if (datos.variacion138 > 0 && datos.variacion135 > 1.0) {
     datos.firma = datos.variacion138 / datos.variacion135;
@@ -697,6 +759,11 @@ Zona decidirFinal() {
   motivo = SIN_MOTIVO;
   avisoFirma = false;
   avisoDispersion = false;
+  avisoSinReaccion = false;
+
+  muestraPor135 = false;
+  muestraPor138 = false;
+  muestraPorBME = false;
 
   pesoTotal = 0;
   posicionGlobal = 0;
@@ -775,12 +842,24 @@ Zona decidirFinal() {
   posicionGlobal = sumaPosicion / pesoTotal;
 
   //-----------------------
-  // 3) Hay muestra?
+  // 3) Hay muestra? (solo aviso)
+  //
+  //    Alcanza con que reaccione UN sensor. variacion138
+  //    vale -1 si no es confiable y variacionBME -999 si
+  //    el BME no esta, asi que en esos casos no cuentan.
+  //
+  //    Ya NO corta el resultado: el diesel a veces no mueve
+  //    ningun sensor y quedaba en DUDA DEBAJO aunque todas
+  //    las variables votaran DIESEL. Ahora gana la votacion
+  //    y solo se avisa que ningun sensor reacciono.
   //-----------------------
 
-  if (datos.variacion135 < VARIACION_MINIMA) {
-    motivo = SIN_MUESTRA;
-    return DUDA_POR_DEBAJO;
+  muestraPor135 = datos.variacion135 >= VARIACION_MINIMA_135;
+  muestraPor138 = datos.variacion138 >= VARIACION_MINIMA_138;
+  muestraPorBME = datos.variacionBME >= VARIACION_MINIMA_BME;
+
+  if (!muestraPor135 && !muestraPor138 && !muestraPorBME) {
+    avisoSinReaccion = true;
   }
 
   //-----------------------
@@ -877,10 +956,22 @@ void imprimirDiagnostico() {
   Serial.print(F(" / "));
   Serial.println(datos.max138, 3);
 
+  Serial.print(F("Max/Ref 138 = "));
+  Serial.print(referencia.mq138 > REF138_MINIMA ? datos.max138 / referencia.mq138 : 0, 3);
+  Serial.print(F("   Max/Ref 135 = "));
+  Serial.println(referencia.mq135 > 0.01 ? datos.max135 / referencia.mq135 : 0, 3);
+
   Serial.print(F("Var138 = "));
   Serial.print(datos.variacion138, 1);
   Serial.print(F("   Firma = "));
   Serial.println(datos.firma, 2);
+
+  Serial.print(F("Muestra detectada por:"));
+  if (muestraPor135) Serial.print(F(" MQ135"));
+  if (muestraPor138) Serial.print(F(" MQ138"));
+  if (muestraPorBME) Serial.print(F(" BME"));
+  if (!muestraPor135 && !muestraPor138 && !muestraPorBME) Serial.print(F(" ninguno"));
+  Serial.println();
 
   Serial.println();
 
@@ -965,6 +1056,12 @@ void imprimirResultado() {
     Serial.println(F("dispersas, evidencia debil"));
   }
 
+  if (avisoSinReaccion) {
+    Serial.println();
+    Serial.println(F("AVISO: ningun sensor reacciono,"));
+    Serial.println(F("puede que no haya muestra"));
+  }
+
   Serial.println(F("============================"));
 
   if (MODO_DIAGNOSTICO) imprimirDiagnostico();
@@ -992,6 +1089,7 @@ void resetCaptura() {
   motivo = SIN_MOTIVO;
   avisoFirma = false;
   avisoDispersion = false;
+  avisoSinReaccion = false;
 
   resultado = DUDA_MEDIO;
 

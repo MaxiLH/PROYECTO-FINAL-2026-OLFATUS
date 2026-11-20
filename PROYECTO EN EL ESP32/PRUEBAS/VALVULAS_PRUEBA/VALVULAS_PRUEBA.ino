@@ -28,9 +28,8 @@
 
 #define SEALEVELPRESSURE_HPA (1013.25)
 
-// Definición de los pines para las válvulas
-const int pinValvulaEntrada = 8;
-const int pinValvulaSalida = 12;
+// Placa ESP32: una sola electrovalvula (entrada)
+const int pinValvulaEntrada = 27;
 
 Adafruit_BME680 bme(&Wire); // I2C
 //Adafruit_BME680 bme(&Wire1); // example of I2C on another bus
@@ -38,18 +37,15 @@ Adafruit_BME680 bme(&Wire); // I2C
 //Adafruit_BME680 bme(BME_CS, BME_MOSI, BME_MISO,  BME_SCK);
 
 void setup() {
-  Serial.begin(112500);
-   // Configuramos los pines de las válvulas como salidas
+  Serial.begin(115200);
+   // Configuramos el pin de la válvula como salida
   pinMode(pinValvulaEntrada, OUTPUT);
-  pinMode(pinValvulaSalida, OUTPUT);
 
   // Nos aseguramos de que todo arranque apagado por seguridad
   digitalWrite(pinValvulaEntrada, LOW);
-  digitalWrite(pinValvulaSalida, LOW);
   delay(1000);
 
   digitalWrite(pinValvulaEntrada, HIGH);
-  digitalWrite(pinValvulaSalida, HIGH);
 }
 
 void loop() {

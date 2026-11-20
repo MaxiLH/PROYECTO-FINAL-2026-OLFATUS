@@ -22,17 +22,30 @@
   Uso:
     powershell -ExecutionPolicy Bypass -File HERRAMIENTAS\monitor_serial.ps1
     powershell -ExecutionPolicy Bypass -File HERRAMIENTAS\monitor_serial.ps1 -Puerto COM4
+    powershell -ExecutionPolicy Bypass -File HERRAMIENTAS\monitor_serial.ps1 -Esp32
+
+  -Esp32 : para la placa con ESP32. No toca DTR ni RTS al abrir:
+           el ESP32 sigue andando sin reiniciarse, y si se aprieta
+           su boton de reset arranca normal (con DTR activo
+           arrancaria en modo de carga y no correria el programa).
+           Guarda en logs\serial_esp32.log, aparte de las pruebas
+           del Nano.
+  -Reiniciar : con -Esp32, reinicia el ESP32 al abrir (pulso en
+           RTS, como el IDE) para ver el cartel de arranque.
 #>
 
 param(
   [string]$Puerto = "COM3",
-  [int]$Baudios = 115200
+  [int]$Baudios = 115200,
+  [switch]$Esp32,
+  [switch]$Reiniciar
 )
 
 $carpetaLogs = Join-Path $PSScriptRoot "logs"
 New-Item -ItemType Directory -Force $carpetaLogs | Out-Null
 
 $archivoLog = Join-Path $carpetaLogs "serial.log"
+if ($Esp32) { $archivoLog = Join-Path $carpetaLogs "serial_esp32.log" }
 $archivoEnviar = Join-Path $carpetaLogs "enviar.txt"
 
 function Escribir-Log([string]$texto) {
@@ -40,8 +53,18 @@ function Escribir-Log([string]$texto) {
   Add-Content -Path $archivoLog -Value $linea -Encoding utf8
 }
 
-$puertoSerie = New-Object System.IO.Ports.SerialPort $Puerto, $Baudios, ([System.IO.Ports.Parity]::None), 8, ([System.IO.Ports.StopBits]::One)
-$puertoSerie.DtrEnable = $true  # reinicia el Nano al abrir, igual que el IDE
+function Nuevo-Puerto {
+  $sp = New-Object System.IO.Ports.SerialPort $Puerto, $Baudios, ([System.IO.Ports.Parity]::None), 8, ([System.IO.Ports.StopBits]::One)
+  if ($Esp32) {
+    $sp.DtrEnable = $false
+    $sp.RtsEnable = $false
+  } else {
+    $sp.DtrEnable = $true  # reinicia el Nano al abrir, igual que el IDE
+  }
+  return $sp
+}
+
+$puertoSerie = Nuevo-Puerto
 
 try {
   $puertoSerie.Open()
@@ -59,6 +82,16 @@ try { [void][Console]::KeyAvailable } catch { $hayTeclado = $false }
 # La fecha la usa log_a_excel.ps1 (las lineas solo tienen la hora)
 Escribir-Log "===== Monitor abierto ($(Get-Date -Format 'yyyy-MM-dd')) en $Puerto a $Baudios baudios ====="
 Write-Host "Monitor abierto en $Puerto a $Baudios baudios. ESC para salir." -ForegroundColor Green
+
+# Reinicio del ESP32: RTS activo = EN en bajo (reset). Con DTR
+# inactivo IO0 queda en alto y arranca el programa normal.
+if ($Esp32 -and $Reiniciar) {
+  $puertoSerie.RtsEnable = $true
+  Start-Sleep -Milliseconds 150
+  $puertoSerie.RtsEnable = $false
+  Escribir-Log ">> ESP32 reiniciado desde el monitor"
+  Write-Host ">> ESP32 reiniciado" -ForegroundColor Cyan
+}
 Write-Host "Log: $archivoLog" -ForegroundColor DarkGray
 
 $buffer = ""
@@ -67,7 +100,28 @@ try {
   while ($true) {
 
     # Lo que manda la placa, linea por linea
-    $datos = $puertoSerie.ReadExisting()
+    try {
+      $datos = $puertoSerie.ReadExisting()
+    } catch {
+      # Se desconecto la placa (o se corto el USB): se espera a
+      # que vuelva el puerto y se sigue escribiendo el mismo log
+      Escribir-Log "===== Se perdio $Puerto, esperando que vuelva ====="
+      Write-Host "Se perdio $Puerto (placa desconectada?). Esperando que vuelva... ESC para salir." -ForegroundColor Yellow
+      try { $puertoSerie.Close() } catch { }
+
+      $salir = $false
+      while ($true) {
+        Start-Sleep -Milliseconds 1000
+        if ($hayTeclado -and [Console]::KeyAvailable -and [Console]::ReadKey($true).Key -eq [ConsoleKey]::Escape) { $salir = $true; break }
+        try { $puertoSerie = Nuevo-Puerto; $puertoSerie.Open(); break } catch { }
+      }
+      if ($salir) { break }
+
+      $buffer = ""
+      Escribir-Log "===== $Puerto recuperado ====="
+      Write-Host "$Puerto recuperado." -ForegroundColor Green
+      continue
+    }
 
     if ($datos) {
       $buffer += $datos

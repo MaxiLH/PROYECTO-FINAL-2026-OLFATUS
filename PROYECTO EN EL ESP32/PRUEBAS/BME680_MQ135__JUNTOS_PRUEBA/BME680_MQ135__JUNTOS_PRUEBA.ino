@@ -33,8 +33,14 @@ Adafruit_BME680 bme(&Wire); // I2C
 //Adafruit_BME680 bme(BME_CS); // hardware SPI
 //Adafruit_BME680 bme(BME_CS, BME_MOSI, BME_MISO,  BME_SCK);
 
+// Placa ESP32 (BME680: SDA = IO21, SCL = IO22)
+const int pinMQ135 = 35;  // A_135_1
+
+// Si hay divisor entre el MQ y el pin: (R1 + R2) / R2. 1.0 = sin divisor
+const float FACTOR_DIVISOR_MQ = 1.0;
+
 void setup() {
-  Serial.begin(112500);
+  Serial.begin(115200);
   while (!Serial);
   Serial.println(F("BME680 test"));
 
@@ -52,8 +58,8 @@ void setup() {
 }
 
 void loop() {
-  int adc_MQ = analogRead(A0); //Lemos la salida analógica del MQ
-  float voltaje = adc_MQ * (5.0 / 1023.0); //Convertimos la lectura en un valor de voltaje
+  int adc_MQ = analogRead(pinMQ135); //MQ135 (ADC de 12 bits: 0-4095)
+  float voltaje = analogReadMilliVolts(pinMQ135) / 1000.0 * FACTOR_DIVISOR_MQ; //voltaje del sensor
   verificacion_lectura_bme();
 
   Serial.print("Adc:");
